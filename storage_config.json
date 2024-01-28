@@ -1,0 +1,10 @@
+{
+    "log_file": {
+        "destination":"./logfile",
+        "max_entries": 65536,
+        "compaction_redundancy_percentage": 0.5
+    },
+    "cache": {
+        "file_refs_budget": 2048
+    }
+}
