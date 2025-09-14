@@ -1,56 +1,159 @@
-use std::array::TryFromSliceError;
-
-use bumpalo::Bump;
+use std::{array::TryFromSliceError, ops::ControlFlow, sync::Arc};
 use uuid::Uuid;
-
-use crate::{objects::ObjectState, errors::storage_error::CompressionError};
+use crate::{errors::storage_error::CompressionError, ObjectField};
 
 #[derive(Clone)]
-pub struct LogEntry<'a> {
-    object_id: Uuid,
-    entry_data: ObjectState<'a>
+pub enum LogEntry {
+    Entity(Uuid, EntityEntry),
+    Transaction(Uuid, TransactionEntry)
 }
 
-impl<'a> LogEntry<'a> {
+#[derive(Clone)]
+pub enum EntityEntry {
+    Updated(Uuid, Arc<[ObjectField]>),
+    Deleted(Uuid)
+}
+
+#[derive(Clone)]
+pub enum TransactionEntry {
+    Committed,
+    Rollbacked
+}
+
+impl LogEntry {
     #[inline]
-    pub fn new(object_id: Uuid, object_state: ObjectState<'a>) -> Self {
-        LogEntry { object_id, entry_data: object_state }
+    pub fn update(transaction_id: Uuid, entity_id: Uuid, fields: Arc<[ObjectField]>) -> Self {
+        LogEntry::Entity(transaction_id, EntityEntry::Updated(entity_id, fields))
     }
+
+    #[inline]
+    pub fn delete(transaction_id: Uuid, entity_id: Uuid) -> Self {
+        LogEntry::Entity(transaction_id, EntityEntry::Deleted(entity_id))
+    }
+
+    #[inline]
+    pub fn commit(transaction_id: Uuid) -> Self {
+        LogEntry::Transaction(transaction_id, TransactionEntry::Committed)
+    }
+
+    #[inline]
+    pub fn rollback(transaction_id: Uuid) -> Self {
+        LogEntry::Transaction(transaction_id, TransactionEntry::Rollbacked)
+    }
+
+    #[inline]
+    pub fn transaction_id(&self) -> Uuid {
+        match self {
+            LogEntry::Entity(id, _) => *id,
+            LogEntry::Transaction(id, _) => *id
+        }
+    }
+
+    #[inline]
+    pub fn compress_to(&self, store: &mut Vec<u8>) {
+        match self {
+            LogEntry::Entity(transaction_id, entity) => {
+                store.extend(transaction_id.as_bytes());
+                match entity {
+                    EntityEntry::Deleted(id) => {
+                        store.push(0);
+                        store.extend(id.as_bytes());
+                    },
+                    EntityEntry::Updated(id, values) => {
+                        store.push(values.len() as u8);
+                        store.extend_from_slice(id.as_bytes());
+                        for value in values.iter() {
+                            value.compress_to(store);
+                        }
+                    }
+                }
+            },
+            LogEntry::Transaction(transaction_id, transaction) => {
+                store.extend(transaction_id.as_bytes());
+                match transaction {
+                    TransactionEntry::Committed => {
+                        store.push(254);
+                    },
+                    TransactionEntry::Rollbacked => {
+                        store.push(255);
+                    }
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub fn decompress(data: &[u8]) -> Result<LogEntry, CompressionError> {
+        let transaction_id = decompress_uuid(data)?;
+        let mut data = &data[16..];
+        let kind = data[0];
+        data = &data[1..];
+        match kind {
+            0 => {
+                let id = decompress_uuid(data)?;
+                Ok(LogEntry::Entity(transaction_id, EntityEntry::Deleted(id)))
+            },
+            254 => {
+                Ok(LogEntry::Transaction(transaction_id, TransactionEntry::Committed))
+            },
+            255 => {
+                Ok(LogEntry::Transaction(transaction_id, TransactionEntry::Rollbacked))
+            },
+            n => {
+                let n = n as usize;
+                let id = decompress_uuid(data)?;
+                data = &data[16..];
+                let mut fields = vec![ObjectField::Bool(false); n];
+                for index in 0..n {
+                    let (field, offset) = ObjectField::decompress(data)?;
+                    fields[index] = field;
+                    data = &data[offset+1..];
+                }
+                Ok(LogEntry::Entity(transaction_id, EntityEntry::Updated(id, fields.into())))
+            }
+        }
+        
+    }
+}
+
+impl EntityEntry {
 
     #[inline]
     pub fn object_id(&self) -> Uuid {
-        self.object_id
+        match self {
+            EntityEntry::Updated(id, _) => *id,
+            EntityEntry::Deleted(id) => *id
+        }
     }
 
+    /// Checks if the object has the same shape as the other one.
+    /// <ul>
+    /// <li>If the checked object is a tombstone, it automatically has a correct shape to every object.</li>
+    /// <li>If the other shape is a tombstone, the function requests checking on another object.</li>
+    /// <li>If both objects have values, all the values between them have to have the same kind.</li>
+    /// </ul>
     #[inline]
-    pub fn entry_data(&self) -> ObjectState {
-        self.entry_data.clone()
+    pub fn is_same_shape(&self, other: &Self) -> ControlFlow<bool> {
+        match (self, other) {
+            (EntityEntry::Deleted(_), _) => ControlFlow::Break(true),
+            (_, EntityEntry::Deleted(_)) => ControlFlow::Continue(()),
+            (
+                EntityEntry::Updated(_, self_values),
+                EntityEntry::Updated(_, other_values)
+            ) => {
+                let all_values_are_same_type = self_values
+                    .iter()
+                    .map(ObjectField::value_id)
+                    .eq(other_values.iter().map(ObjectField::value_id));
+                ControlFlow::Break(all_values_are_same_type)
+            },
+        }
     }
+}
 
-
-    #[inline]
-    pub fn compress(&self, arena: &Bump) -> Vec<u8> {
-        self.object_id.as_bytes()
-            .iter()
-            .chain(self.entry_data.compress(arena).iter())
-            .copied()
-            .collect()
-    }
-
-    #[inline]
-    pub fn decompress(data: & [u8], arena: &'a Bump) -> Result<LogEntry<'a>, CompressionError> {
-        let uuid = Self::decompress_uuid(data)?;
-        let object_state = ObjectState::decompress(&data[16..], arena)?;
-        Ok(LogEntry {
-            object_id: uuid,
-            entry_data: object_state
-        })
-    }
-
-    #[inline]
-    fn decompress_uuid(data: &[u8]) -> Result<Uuid, CompressionError> {
-        let fixed_uuid_slice: Result<[u8; 16], Box<TryFromSliceError>> = data[0..16].try_into().map_err(Box::new);
-        let fixed_uuid_slice = fixed_uuid_slice.map_err(|e| CompressionError(e));
-        Ok(Uuid::from_bytes(fixed_uuid_slice?))
-    }
+#[inline]
+fn decompress_uuid(data: &[u8]) -> Result<Uuid, CompressionError> {
+    let fixed_uuid_slice: Result<[u8; 16], Box<TryFromSliceError>> = data[0..16].try_into().map_err(Box::new);
+    let fixed_uuid_slice = fixed_uuid_slice.map_err(|e| CompressionError(e));
+    Ok(Uuid::from_bytes(fixed_uuid_slice?))
 }

@@ -1,7 +1,6 @@
-use std::fs;
+use std::{fs, sync::Arc};
 
-use bumpalo::{Bump, vec};
-use db::{ObjectState, ObjectField};
+use db::{ObjectField};
 use uuid::Uuid;
 
 pub fn wipe_log_files() {
@@ -18,19 +17,17 @@ const STRINGS: [&str; 6] = [
     "Jormungander"
 ];
 
-pub fn generate_sample_data(n: u32, arena: &Bump) -> Vec<(Uuid, ObjectState)> {
+pub fn generate_sample_data(n: u32) -> Vec<(Uuid, Arc<[ObjectField]>)> {
     let data: Vec<_> = (0..n)
     .map(|_| {
         let id = Uuid::new_v4();
-        let state = ObjectState::ObjectValues(
-            vec![in arena;
-                ObjectField::String(STRINGS[rand::random::<usize>() % STRINGS.len()]),
-                ObjectField::I32(rand::random()),
-                ObjectField::Decimal(rand::random::<f64>() * 1000f64),
-                ObjectField::Bool(rand::random()),
-                ObjectField::String(STRINGS[rand::random::<usize>() % STRINGS.len()])
-            ]
-        );
+        let state: Arc<[ObjectField]> = vec![
+            ObjectField::String(STRINGS[(rand::random::<u64>() % STRINGS.len() as u64) as usize].into()),
+            ObjectField::I32(rand::random()),
+            ObjectField::Decimal(rand::random::<f64>() * 1000f64),
+            ObjectField::Bool(rand::random()),
+            ObjectField::String(STRINGS[(rand::random::<u64>() % STRINGS.len() as u64) as usize].into())
+        ].into_boxed_slice().into();
         (id, state)
     })
     .collect();

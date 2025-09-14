@@ -5,36 +5,34 @@ mod storage;
 mod utils;
 
 pub use storage::{Storage, collection::Collection};
-pub use objects::{ObjectState, ObjectField};
+pub use objects::{ObjectField};
 pub use utils::DBResult;
 
 #[cfg(test)]
 mod tests {
-    use std::{time::{Duration, Instant}, fs, sync::Arc};
+    use crate::{ObjectField};
+    use std::{fs, sync::Arc, time::{Duration, Instant}};
 
-    use bumpalo::{Bump, vec};
     use serde::Deserialize;
     use serial_test::serial;
     use uuid::Uuid;
 
-    use crate::{objects::{ObjectField, ObjectState}, storage::Storage, utils::DBResult};
+    use crate::{storage::Storage, utils::DBResult};
 
     fn wipe_log_files() {
         fs::remove_dir_all("./logfile").unwrap();
         fs::create_dir("./logfile").unwrap();
     }
 
-    fn generate_sample_data(arena: &Bump) -> (Vec<(Uuid, ObjectState)>, Vec<Uuid>) {
+    fn generate_sample_data() -> (Vec<(Uuid, Arc<[ObjectField]>)>, Vec<Uuid>) {
         let data: Vec<_> = (1..10000)
         .map(|_| {
             let id = Uuid::new_v4();
-            let state = ObjectState::ObjectValues(
-                vec![in arena;
-                    ObjectField::String("Michał"),
-                    ObjectField::I32(26),
-                    ObjectField::Decimal(654.645)
-                ]
-            );
+            let state: Arc<[ObjectField]> = vec![
+                ObjectField::String("Michał".into()),
+                ObjectField::I32(26),
+                ObjectField::Decimal(654.645)
+            ].into_boxed_slice().into();
             (id, state)
         })
         .collect();
@@ -57,20 +55,16 @@ mod tests {
             .write()
             .unwrap();
 
-        let arena = Bump::new();
-
         let mut duration = Duration::default();
         for _ in 1..10000 {
             let id = Uuid::new_v4();
-            let state = ObjectState::ObjectValues(
-                vec![in &arena;
-                    ObjectField::String("Michał"),
-                    ObjectField::I32(26),
-                    ObjectField::Decimal(654.645)
-                ]
-            );
+            let state: Arc<[ObjectField]> = vec![
+                ObjectField::String("Michał".into()),
+                ObjectField::I32(26),
+                ObjectField::Decimal(654.645)
+            ].into_boxed_slice().into();
             let instant = Instant::now();
-            collection.set_object(id, state).unwrap();
+            collection.set_object(Uuid::nil(), id, state).unwrap();
             duration += Instant::now() - instant;
         }
         println!("Duration of save speed test: {:#?}", duration);
@@ -87,21 +81,17 @@ mod tests {
             .write()
             .unwrap();
 
-        let arena = Bump::new();
-
         let data: Vec<_> = (1..10000).map(|_| {
             let id = Uuid::new_v4();
-            let state = ObjectState::ObjectValues(
-                vec![in &arena;
-                    ObjectField::String("Michał"),
-                    ObjectField::I32(26),
-                    ObjectField::Decimal(654.645)
-                ]
-            );
+            let state: Arc<[ObjectField]> = vec![
+                ObjectField::String("Michał".into()),
+                ObjectField::I32(26),
+                ObjectField::Decimal(654.645)
+            ].into_boxed_slice().into();
             (id, state)
         }).collect();
         let instant = Instant::now();
-        collection.set_objects(data.into_iter()).unwrap();
+        collection.set_objects(Uuid::nil(), data.into_iter()).unwrap();
         println!("Duration of save multiple speed test: {:#?}", Instant::now() - instant);
     }
 
@@ -113,15 +103,11 @@ mod tests {
         let instant = Instant::now();
         let id = Uuid::new_v4();
 
-        let arena = Bump::new();
-
-        let state = ObjectState::ObjectValues(
-            vec![in &arena;
-                ObjectField::String("Michał"),
-                ObjectField::I32(26),
-                ObjectField::Decimal(654.645)
-            ]
-        );
+        let state: Arc<[ObjectField]> = vec![
+            ObjectField::String("Michał".into()),
+            ObjectField::I32(26),
+            ObjectField::Decimal(654.645)
+        ].into_boxed_slice().into();
         {
             let mut collection1 = engine
                 .create_new_collection("table")
@@ -129,7 +115,7 @@ mod tests {
                 .write()
                 .unwrap();
             
-            collection1.set_object(id, state.clone()).unwrap();
+            collection1.set_object(Uuid::nil(), id, state.clone()).unwrap();
         }
         {
             let mut collection2 = engine
@@ -137,7 +123,7 @@ mod tests {
                 .unwrap()
                 .write()
                 .unwrap();
-            collection2.set_object(id, state).unwrap();
+            collection2.set_object(Uuid::nil(), id, state).unwrap();
         }
         println!("Duration of save multiple tables speed test: {:#?}", Instant::now() - instant);
     }
@@ -155,11 +141,9 @@ mod tests {
 
 
         {
-            let arena = Bump::new();
-
             // Setup
-            let (data, _ids) = generate_sample_data(&arena);
-            println!("Inserting {} objects", collection.set_objects(data.into_iter()).unwrap());
+            let (data, _ids) = generate_sample_data();
+            println!("Inserting {} objects", collection.set_objects(Uuid::nil(), data.into_iter()).unwrap());
         }
     
         #[derive(Deserialize)]
@@ -170,7 +154,6 @@ mod tests {
         }
 
         // Test
-        let collection = Arc::new(collection);
         println!("Beginning the test");
         let instant = Instant::now();
         let data: DBResult<Vec<TestStruct>> = collection.iterate::<TestStruct>().collect();

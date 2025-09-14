@@ -1,4 +1,6 @@
-use crate::storage::log_file::log_entry::LogEntry;
+use uuid::Uuid;
+
+use crate::{ObjectField};
 
 use self::{sorted::SortedIndex, reverse::ReverseIndex, bitmap::BitmapIndex, hash::HashIndex};
 
@@ -16,5 +18,5 @@ pub enum WrappedIndex {
 }
 
 pub trait Index {
-    fn update(&mut self, entry: &LogEntry);
+    fn update(&mut self, entry_id: Uuid, entry: &Box<[ObjectField]>);
 }

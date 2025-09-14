@@ -1,6 +1,8 @@
-use std::{path::{PathBuf, Path}, ffi::OsString, fs};
+use std::{ffi::OsString, fs, path::{Path, PathBuf}};
 
-use crate::{storage::{storage_config::DatabaseConfig, log_file::LogFileData}, utils::DBResult};
+use itertools::Itertools;
+
+use crate::{storage::{storage_config::DatabaseConfig}, utils::DBResult};
 
 #[derive(Clone)]
 pub struct CollectionConfig {
@@ -31,27 +33,39 @@ impl CollectionConfig {
         }
     }
 
-    pub fn get_log_file_paths(&self) -> DBResult<Vec<LogFileData>> {
+    pub fn ensure_file_exists(&mut self, index: usize) -> DBResult<()> {
+        let path = self.get_log_path(index);
+        _ = fs::File::options()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        Ok(())
+    }
+
+    pub fn get_log_file_paths(&self) -> DBResult<Vec<PathBuf>> {
         let directory_data = Path::read_dir(&self.get_collection_files_destination())?;
 
         let directory_data  = directory_data.collect::<Result<Vec<_>,_>>()?;
 
-        let directory_entries = directory_data
+        let file_paths = directory_data
             .iter()
-            .map(|entry| entry.file_type().map(|t| (entry, t.is_file())))
-            .collect::<Result<Vec<_>,_>>()?;
-
-        let file_paths = directory_entries
-            .iter()
+            .flat_map(|entry| entry.file_type().map(|t| (entry, t.is_file())))
             .filter(|(_, is_file)| *is_file)
             .map(|(e, _)| e.path());
 
-        let mut valid_log_files = file_paths
-            .map(|path| (path.clone(), path.file_name().map(|f|f.to_os_string()).expect("A file with an invalid path??")))
-            .filter_map(|(path, filename)| get_logfile_id(filename).map(|id|(path, id, None.into())))
-            .collect::<Vec<_>>();
+        let valid_log_files = file_paths
+            .map(|path| {
+                let os_string = path
+                    .file_name()
+                    .map(|f|f.to_os_string())
+                    .expect("A file with an invalid path??");
+                (path, os_string)
+            })
+            .filter_map(|(path, filename)| get_logfile_id(filename).map(|id|(path, id)))
+            .sorted_unstable_by_key(|(_, id)| *id)
+            .map(|(path, _)| path)
+            .collect_vec();
 
-        valid_log_files.sort_unstable_by_key(|(_, id, _)| *id);
         Ok(valid_log_files)
     }
 
@@ -66,9 +80,8 @@ impl CollectionConfig {
     /// Returns the path and index of the log file after the current one
     pub fn get_next_log_path(&self) -> DBResult<(PathBuf, usize)> {
         let file_paths = self.get_log_file_paths()?;
-        let next_id = file_paths.last().map_or(0, |(_, i, _)| i + 1);
-        let next_log_file = self.get_log_path(next_id);
-        Ok((next_log_file, next_id))
+        let next_id = file_paths.len();
+        Ok((self.get_log_path(next_id), next_id))
     }
 }
 

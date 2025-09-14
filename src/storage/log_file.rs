@@ -1,11 +1,4 @@
-use std::{fs::{self, File}, io::Write, ops::{DerefMut, Deref}, path::PathBuf, sync::Arc, cell::RefCell};
-use bumpalo::{collections::{Vec, CollectIn}, Bump};
-use itertools::Itertools;
-
-#[cfg(target_os="windows")]
-use std::os::windows::prelude::OpenOptionsExt;
-
-use memmap2::Mmap;
+use std::{fs::{self, File}, io::{Read, Write}, ops::{Deref, DerefMut}, path::PathBuf, sync::RwLock};
 
 use crate::{errors::DatabaseError, utils::{SplittableByLengthEncoding, DBResult}};
 use self::log_entry::LogEntry;
@@ -16,89 +9,63 @@ pub mod log_entry;
 pub mod log_position;
 mod log_compaction;
 
-pub type LogFileData = (PathBuf, usize, RefCell<Option<Arc<Mmap>>>);
+pub struct LogFile(pub(crate) RwLock<Vec<LogEntry>>, pub(crate) usize);
 
-pub struct LogFile<'bump>(pub(crate) Vec<'bump, LogEntry<'bump>>);
+impl Deref for LogFile {
+    type Target = RwLock<Vec<LogEntry>>;
 
-impl<'bump> Deref for LogFile<'bump> {
-    type Target = Vec<'bump, LogEntry<'bump>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl DerefMut for LogFile<'_> {
+impl DerefMut for LogFile {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<'bump> LogFile<'bump> {
-    pub fn load_log_file(config: &CollectionConfig, file_index: usize) -> DBResult<Mmap> {
+impl LogFile {
+    pub fn load_log_file(config: &CollectionConfig, file_index: usize) -> DBResult<LogFile> {
         let log_path = config.get_log_path(file_index);
-        LogFile::load_from_path(&log_path)
+        LogFile::load_from_path(&log_path, file_index)
     }
 
     #[inline]
-    pub fn deserialize(arena: &'bump Bump, file: &[u8]) -> DBResult<LogFile<'bump>> {
+    fn load_from_path(path: &PathBuf, file_index: usize) -> DBResult<LogFile> {
+        let mut file = File::options()
+            .read(true)
+            .open(path)?;
+
+        let mut data = vec![];
+        file.read_to_end(&mut data)?;
+
+        Self::deserialize(&data, file_index)
+    }
+
+    #[inline]
+    fn deserialize(file: &[u8], file_index: usize) -> DBResult<LogFile> {
 
         let decompressed_data = file
             .split_by_length_encoding()
-            .map(|d| LogEntry::decompress(d, arena))
+            .map(LogEntry::decompress)
             .map(|r| r.map_err(DatabaseError::from))
-            .collect_in::<DBResult<Vec<LogEntry>>>(arena)?;
-    
-        let log_file = LogFile(decompressed_data);
-    
-        Ok(log_file)
-    }
+            .collect::<DBResult<Vec<LogEntry>>>()?;
 
-    #[inline]
-    pub fn load_from_path(path: &PathBuf) -> DBResult<Mmap> {
-        #[cfg(target_os = "windows")]
-        let file = File::options()
-            .access_mode(0x000F)
-            .open(path)?;
-
-        #[cfg(not(target_os = "windows"))]
-        let file = File::options()
-            .open(path)?;
-
-        let map = unsafe { Mmap::map(&file)? };
-
-        Ok(map)
+        Ok(LogFile(decompressed_data.into(), file_index))
     }
     
-    pub fn create_next_log_file(config: &mut CollectionConfig) -> DBResult<LogFileData> {
-        let next_file_data = config.get_next_log_path()?;
-    
-        let _ = fs::File::options().create(true).append(true).open(&next_file_data.0)?;
-    
-        Ok((next_file_data.0, next_file_data.1, None.into()))
-    }
-    
-    pub fn truncate_entries<'a>(config: &'a CollectionConfig, file_index: usize, entries: impl Iterator<Item = &'a LogEntry<'a>>) -> DBResult<usize> {
-        LogFile::write_entries(config, file_index, entries, true)
+    pub fn truncate_entries(&self, config: &CollectionConfig, entries: impl Iterator<Item = LogEntry>) -> DBResult<usize> {
+        LogFile::write_entries(self, config, entries, true)
     }
 
-    pub fn append_entries<'a>(config: &'a CollectionConfig, file_index: usize, entries: impl Iterator<Item = &'a LogEntry<'a>>) -> DBResult<usize> {
-        LogFile::write_entries(config, file_index, entries, false)
+    pub fn append_entries(&self, config: &CollectionConfig, entries: impl Iterator<Item = LogEntry>) -> DBResult<usize> {
+        LogFile::write_entries(self, config, entries, false)
     }
 
-    fn write_entries<'a>(config: &CollectionConfig, file_index: usize, entries: impl Iterator<Item = &'a LogEntry<'a>>, truncate: bool) -> DBResult<usize> {
-        let file_path = config.get_log_path(file_index);
+    fn write_entries(&self, config: &CollectionConfig, entries: impl Iterator<Item = LogEntry>, truncate: bool) -> DBResult<usize> {
+        let file_path = config.get_log_path(self.1);
 
-        let arena = Bump::new();
-
-        let compressed_entries = entries
-            .flat_map(|entry| {
-                let compressed = entry.compress(&arena);
-                let compressed_length = vint64::encode(compressed.len().try_into().unwrap());
-                let len_iter = compressed_length.as_ref().iter();
-                len_iter.chain(compressed.iter()).copied().collect_vec()
-            })
-            .collect_vec();
-    
         let mut file = if truncate {
             fs::File::options()
                 .write(true)
@@ -106,16 +73,28 @@ impl<'bump> LogFile<'bump> {
                 .open(file_path)
         } else {
             fs::File::options()
-                .write(true)
                 .append(true)
                 .open(file_path)
         }?;
-    
-        file.write_all(compressed_entries.as_slice())?;
+
+        let mut entries_count = 0;
+        let mut lock = self.write()?;
+        let mut store = vec![];
+
+        for entry in entries {
+            entry.compress_to(&mut store);
+            let compressed_length = vint64::encode(store.len() as u64);
+            file.write_all(compressed_length.as_ref())?;
+            file.write_all(&store)?;
+            lock.push(entry);
+            
+            entries_count += 1;
+            store.clear();
+        }
     
         file.sync_data()?;
     
-        Ok(compressed_entries.len())
+        Ok(entries_count)
     }
 
 }

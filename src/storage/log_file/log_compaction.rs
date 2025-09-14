@@ -1,49 +1,59 @@
-use std::collections::HashMap;
-use bumpalo::Bump;
+use std::{collections::{HashMap, HashSet}, sync::Arc};
 use itertools::Itertools;
 use uuid::Uuid;
 
-use crate::{storage::collection::collection_config::CollectionConfig, utils::DBResult, errors::compaction_error::CompactionError};
+use crate::{errors::compaction_error::CompactionError, storage::{collection::collection_config::CollectionConfig, log_file::log_entry::{EntityEntry, TransactionEntry}}, utils::DBResult, ObjectField};
 
 use super::{LogFile, log_entry::LogEntry};
 
 pub fn compact_files(older_index: usize, newer_index: usize, config: &CollectionConfig) -> DBResult<()> {
-    let arena = Bump::new();
-    let older_map = LogFile::load_from_path(&config.get_log_path(older_index))?;
-    let newer_map = LogFile::load_from_path(&config.get_log_path(newer_index))?;
+    let older = LogFile::load_log_file(config, older_index)?;
+    let newer = LogFile::load_log_file(config, newer_index)?;
 
-    let older = LogFile::deserialize(&arena, &older_map)?;
-    let newer = LogFile::deserialize(&arena, &newer_map)?;
-    
-    let entries = compress_log_files(older, newer)?;
-    save_compacted_entries(entries, older_index, newer_index, config)
+    let entries = compress_log_files(&older, &newer)?;
+    save_compacted_entries(entries, older, newer, config)
 }
 
-fn save_compacted_entries(entries: HashMap<Uuid, LogEntry>, older_index: usize, newer_index: usize, config: &CollectionConfig) -> DBResult<()> {
+fn save_compacted_entries(entries: HashMap<Uuid, Option<Arc<[ObjectField]>>>, older: LogFile, newer: LogFile, config: &CollectionConfig) -> DBResult<()> {
     let max_entries = config.storage_config.log_file.max_entries;
-    let chunks = entries.values().chunks(max_entries);
-    let mut chunked = chunks.into_iter();
+    let chunks = entries.into_iter().chunks(max_entries);
 
-    let first = chunked.next().unwrap();
-    LogFile::truncate_entries(config, older_index, first)?;
-    if let Some(second) = chunked.next() {
-        LogFile::truncate_entries(config, newer_index, second)?;
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        if index >= 2 {
+            return Err(CompactionError::from_str("More than two log files from compaction - this should not happen").into())
+        }
+        let file = if index == 0 { &older } else { &newer };
+        LogFile::truncate_entries(file, config, chunk.filter_map(|(id, values)| {
+            values.map(|v| LogEntry::update(Uuid::nil(), id, v))
+        }))?;
     }
-    
-    if chunked.next().is_some() {
-        Err(CompactionError::from_str("More than two log files from compaction - this should not happen").into())
-    } else {
-        Ok(())
-    }
+
+    Ok(())
 }
 
-fn compress_log_files<'a>(older_entries: LogFile<'a>, newer_entries: LogFile<'a>) -> DBResult<HashMap<Uuid, LogEntry<'a>>> {
-    let mut entries: HashMap<Uuid, LogEntry> = HashMap::with_capacity((older_entries.len() + newer_entries.len()) / 2);
-    for entry in newer_entries.0.into_iter().chain(older_entries.0.into_iter()) {
-        let key = entry.object_id();
-        if entries.contains_key(&key) {
-            entries.insert(key, entry);
+fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBResult<HashMap<Uuid, Option<Arc<[ObjectField]>>>> {
+    let older_entries = older_entries.read()?;
+    let newer_entries = newer_entries.read()?;
+    let mut entries: HashMap<Uuid, Option<Arc<[ObjectField]>>> = HashMap::with_capacity((older_entries.len() + newer_entries.len()) / 2);
+    let mut transactions = HashSet::<Uuid>::new();
+    for entry in newer_entries.iter().chain(older_entries.iter()) {
+        match entry {
+            LogEntry::Entity(transaction_id, EntityEntry::Updated(entry_id,  values)) => {
+                if transactions.contains(transaction_id) {
+                    entries.entry(*entry_id).or_insert_with(|| Some(values.clone()));
+                }
+            },
+            LogEntry::Entity(transaction_id, EntityEntry::Deleted(entry_id)) => {
+                if transactions.contains(transaction_id) {
+                    entries.entry(*entry_id).or_insert_with(|| None);
+                }
+            },
+            LogEntry::Transaction(transaction_id, TransactionEntry::Committed) => {
+                transactions.insert(*transaction_id);
+            },
+            LogEntry::Transaction(_, TransactionEntry::Rollbacked) => { },
         }
+        
     }
     Ok(entries)
 }

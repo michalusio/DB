@@ -50,7 +50,7 @@ impl<'a> Iterator for SplitByLengthEncoding<'a>
     fn size_hint(&self) -> (usize, Option<usize>) {
         // If there's only one value inside, we yield one slice.
         // If it matches every other element, we yield (n+1)/2 slices (zero-length slices).
-        (1, Some((self.slice.len() + 1) / 2))
+        (1, Some(self.slice.len().div_ceil(2)))
     }
 }
 

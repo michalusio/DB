@@ -1,21 +1,21 @@
-use std::{array::TryFromSliceError, cmp::Ordering, fmt::Display, slice};
+use std::{array::TryFromSliceError, cmp::Ordering, fmt::Display, sync::Arc};
 use uuid::Uuid;
-use bumpalo::collections::Vec;
 
 use crate::errors::storage_error::CompressionError;
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum ObjectField {
-    String(&'static str),
+    String(Arc<str>),
     I32(i32),
     I64(i64),
     Decimal(f64),
-    Bytes(&'static [u8]),
+    Bytes(Arc<[u8]>),
     Id(Uuid),
     Bool(bool)
 }
 
+#[inline]
 fn take_bytes<const N: usize>(data: &[u8]) -> Result<[u8; N], CompressionError> {
     let bytes: Result<[u8; N], TryFromSliceError> = data[0..N].try_into();
     bytes.map_err(CompressionError::wrap)
@@ -40,7 +40,7 @@ impl ObjectField {
         to.push(self.value_id());
         match self {
             ObjectField::String(str) => {
-                let compressed_length = vint64::encode(str.len().try_into().unwrap());
+                let compressed_length = vint64::encode(str.len() as u64);
                 to.extend_from_slice(compressed_length.as_ref());
                 to.extend_from_slice(str.as_bytes());
             },
@@ -48,7 +48,7 @@ impl ObjectField {
             ObjectField::I64(i) => to.extend_from_slice(&i.to_le_bytes()),
             ObjectField::Decimal(d) => to.extend_from_slice(&d.to_le_bytes()),
             ObjectField::Bytes(b) => {
-                let compressed_length = vint64::encode(b.len().try_into().unwrap());
+                let compressed_length = vint64::encode(b.len() as u64);
                 to.extend_from_slice(compressed_length.as_ref());
                 to.extend_from_slice(b);
             },
@@ -60,14 +60,16 @@ impl ObjectField {
     #[inline]
     pub fn decompress(data: &[u8]) -> Result<(ObjectField, usize), CompressionError> {
         let id = data[0];
-        let mut data = make_static(&data[1..]);
+        let data = &data[1..];
         match id {
             0 => {
-                let bytes: u64 = vint64::decode(&mut data).map_err(CompressionError::wrap)?;
-                let len = bytes.try_into().unwrap();
-                let string = std::str::from_utf8(&data[0..len]).map_err(CompressionError::wrap)?;
-                let field = ObjectField::String(string);
-                Ok((field, vint64::encoded_len(bytes) + len))
+                let vint_len = vint64::decoded_len(data[0]);
+                let mut vint_slice = &data[0..vint_len];
+                let bytes: u64 = vint64::decode(&mut vint_slice).map_err(CompressionError::wrap)?;
+                let len = bytes as usize;
+                let string = unsafe { std::str::from_utf8_unchecked(&data[vint_len..][..len]) };
+                let field = ObjectField::String(string.into());
+                Ok((field, vint_len + len))
             },
             1 => {
                 let field = ObjectField::I32(i32::from_le_bytes(take_bytes(data)?));
@@ -82,27 +84,23 @@ impl ObjectField {
                 Ok((field, 8))
             },
             4 => {
-                let bytes: u64 = vint64::decode(&mut data).map_err(CompressionError::wrap)?;
-                let len = bytes.try_into().unwrap();
-                let field = ObjectField::Bytes(&data[0..len]);
-                Ok((field, vint64::encoded_len(bytes) + len))
+                let vint_len = vint64::decoded_len(data[0]);
+                let mut vint_slice = &data[0..vint_len];
+                let bytes: u64 = vint64::decode(&mut vint_slice).map_err(CompressionError::wrap)?;
+                let len = bytes as usize;
+                let field = ObjectField::Bytes(data[vint_len..][..len].into());
+                Ok((field, vint_len + len))
             },
             5 => {
                 let field = ObjectField::Id(Uuid::from_bytes(take_bytes(data)?));
                 Ok((field, 16))
             },
             6 => {
-                let field = ObjectField::Bool(take_bytes::<1>(data)?[0] > 0);
+                let field = ObjectField::Bool(data[0] > 0);
                 Ok((field, 1))
             }
             n => Err(CompressionError::from_string(format!("Invalid object field denominator: {}", n)))
         }
-    }
-}
-
-fn make_static(data: &[u8]) -> &'static [u8] {
-    unsafe {
-        slice::from_raw_parts(data.as_ptr(), data.len())
     }
 }
 

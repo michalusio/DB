@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
-use bumpalo::Bump;
 use criterion::{criterion_group, criterion_main, Criterion};
-use db::{Storage, DBResult};
+use db::{DBResult, ObjectField, Storage};
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::utils::{wipe_log_files, generate_sample_data};
 
@@ -21,28 +21,44 @@ fn criterion_benchmark(c: &mut Criterion) {
             .unwrap();
 
         // Setup
-        let arena = Bump::new();
-        let data = generate_sample_data(10_000, &arena);
-        collection.set_objects(data.into_iter()).unwrap();
-        collection.print_debug_info();
+        let data = generate_sample_data(10_000);
+        collection.set_objects(Uuid::nil(), data).unwrap();
+        collection.clear_cache();
     }
 
     #[derive(Deserialize)]
     struct TestStruct {
-        _a: String,
+        _a: Cow<'static, str>,
         _b: i32,
-        _c: f64
+        _c: f64,
+        _d: bool,
+        _e: Cow<'static, str>
     }
-
-    c.bench_function("collection iteration", |b| {
+    
+    c.bench_function("collection iteration (ten thousand entries)", |b| {
         b.iter(|| {
             let collection = engine
                 .get_collection("table")
                 .unwrap()
                 .read()
                 .unwrap();
-            let data: DBResult<Vec<TestStruct>> = Arc::new(collection).iterate::<TestStruct>().collect();
+            let data: DBResult<Vec<(Uuid, Arc<[ObjectField]>)>> = collection.iterate_native().collect();
             let data = data.unwrap();
+            assert_eq!(data.len(), 10_000);
+            std::mem::drop(data);
+        });
+    });
+
+    c.bench_function("collection iteration (ten thousand entries) with deserialization", |b| {
+        b.iter(|| {
+            let collection = engine
+                .get_collection("table")
+                .unwrap()
+                .read()
+                .unwrap();
+            let data: DBResult<Vec<TestStruct>> = collection.iterate::<TestStruct>().collect();
+            let data = data.unwrap();
+            assert_eq!(data.len(), 10_000);
             std::mem::drop(data);
         });
     });

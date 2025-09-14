@@ -4,14 +4,13 @@ use std::marker::PhantomData;
 use serde::Deserialize;
 
 use super::native_collection_iterator::NativeCollectionIterator;
-use crate::ObjectState;
 use crate::errors::DatabaseError;
 use crate::objects::ObjectDeserializer;
 use crate::utils::DBResult;
 
 pub struct CollectionIterator<'a, T: Deserialize<'a>> {
     iterator: NativeCollectionIterator<'a>,
-    data: PhantomData<&'a T>
+    data: PhantomData<T>
 }
 
 impl<'a, T: Deserialize<'a>> CollectionIterator<'a, T> {
@@ -32,13 +31,12 @@ impl<'a, T: Deserialize<'a>> Iterator for CollectionIterator<'a, T> {
         match self.iterator.next() {
             None => None,
             Some(Err(err)) => Some(Err(err)),
-            Some(Ok(ObjectState::ObjectValues(values))) => {
+            Some(Ok((_, values))) => {
                 let mut deserializer = ObjectDeserializer::new(values);
                 let value = T::deserialize(&mut deserializer)
                     .map_err(|err| DatabaseError::Query(err.into()));
                 Some(value)
-            },
-            _ => unreachable!()
+            }
         }
     }
 

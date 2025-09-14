@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use bumpalo::Bump;
 use criterion::{criterion_group, criterion_main, Criterion};
-use db::{Storage, DBResult};
+use db::{DBResult, ObjectField, Storage};
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::utils::{wipe_log_files, generate_sample_data};
 
@@ -21,36 +21,54 @@ fn criterion_benchmark(c: &mut Criterion) {
             .unwrap();
 
         // Setup
-        let arena = Bump::new();
-        let data = generate_sample_data(1_000_000, &arena);
-        collection.set_objects(data.into_iter()).unwrap();
-        collection.print_debug_info();
+        let data = generate_sample_data(1_000_000);
+        collection.set_objects(Uuid::nil(), data).unwrap();
+        collection.clear_cache();
     }
 
     #[derive(Deserialize)]
     struct TestStruct {
-        _a: String,
+        _a: Cow<'static, str>,
         _b: i32,
         _c: f64,
         _d: bool,
-        _e: String
+        _e: Cow<'static, str>
     }
 
-    c.bench_function("big collection iteration", |b| {
+    c.bench_function("big collection iteration (one million entries)", |b| {
         b.iter(|| {
             let collection = engine
                 .get_collection("table")
                 .unwrap()
                 .read()
                 .unwrap();
-            let collection = Arc::new(collection);
+
+            let data: DBResult<Vec<(Uuid, Arc<[ObjectField]>)>> = collection.iterate_native().collect();
+            let data = data.unwrap();
+            assert_eq!(data.len(), 1_000_000);
+            std::mem::drop(data);
+        });
+    });
+
+    c.bench_function("big collection iteration (one million entries) with deserialization", |b| {
+        b.iter(|| {
+            let collection = engine
+                .get_collection("table")
+                .unwrap()
+                .read()
+                .unwrap();
 
             let data: DBResult<Vec<TestStruct>> = collection.iterate::<TestStruct>().collect();
             let data = data.unwrap();
+            assert_eq!(data.len(), 1_000_000);
             std::mem::drop(data);
         });
     });
 }
 
-criterion_group!(big_collection_iteration, criterion_benchmark);
+criterion_group!{
+    name = big_collection_iteration;
+    config = Criterion::default().measurement_time(Duration::from_secs(10)).sample_size(15);
+    targets = criterion_benchmark
+}
 criterion_main!(big_collection_iteration);

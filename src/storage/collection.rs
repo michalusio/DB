@@ -1,12 +1,12 @@
-use std::ops::ControlFlow::Break;
+use std::{ops::ControlFlow::Break, sync::{Arc, Mutex}};
 
-use super::{log_file::{ LogFile, log_entry::LogEntry, LogFileData}, query::Query};
-use bumpalo::{Bump, collections::{CollectIn, Vec}};
+use super::{log_file::{LogFile, log_entry::LogEntry}, query::Query};
 use itertools::Itertools;
+use schnellru::{ByMemoryUsage, LruMap};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{objects::ObjectState, errors::storage_error::SchemaError, utils::DBResult};
+use crate::{errors::storage_error::{SchemaError, StorageError}, storage::log_file::log_entry::EntityEntry, utils::DBResult, ObjectField};
 
 use self::{collection_config::CollectionConfig, indexes::WrappedIndex, collection_statistics::CollectionStatistics, collection_iterator::CollectionIterator, native_collection_iterator::NativeCollectionIterator};
 
@@ -17,39 +17,27 @@ mod native_collection_iterator;
 mod collection_iterator;
 
 pub struct Collection {
-    last_file_entries: usize,
-    log_files: std::vec::Vec<LogFileData>,
+    last_file_index: usize,
+    log_files: Mutex<LruMap<usize, Arc<LogFile>, ByMemoryUsage>>,
     config: CollectionConfig,
-    indexes: std::vec::Vec<WrappedIndex>,
+    indexes: Vec<WrappedIndex>,
     statistics: CollectionStatistics
 }
 
 impl Collection {
     pub(crate) fn new(mut config: CollectionConfig) -> DBResult<Collection> {
         config.ensure_folder_exists()?;
+        config.ensure_file_exists(0)?;
 
-        let mut log_paths = config.get_log_file_paths()?;
+        let file_budget = config.storage_config.cache.file_budget;
 
-        if log_paths.is_empty() {
-            log_paths.push(LogFile::create_next_log_file(&mut config)?);
-        }
-
-        let mut collection = Collection {
+        let collection = Collection {
+            last_file_index: config.get_log_file_paths()?.len() - 1,
             config,
-            last_file_entries: 0,
-            log_files: log_paths,
+            log_files: Mutex::new(LruMap::with_memory_budget(file_budget)),
             indexes: std::vec::Vec::new(),
             statistics: CollectionStatistics::default()
         };
-
-        let last_logfile_index = collection.log_files.last().map_or(0, |(_, i, _)| *i);
-
-        let len = {
-            let arena = Bump::new();
-            let items = collection.get_file(last_logfile_index, &arena).unwrap()?;
-            items.len()
-        };
-        collection.last_file_entries = len;
 
         Ok(collection)
     }
@@ -59,22 +47,22 @@ impl Collection {
     }
 
     /// Sets the state of the object with the given id to the given state
-    pub fn set_object(&mut self, object_id: Uuid, object_state: ObjectState) -> DBResult<usize> {
-        self.set_objects([(object_id, object_state)])
+    pub fn set_object(&mut self, transaction_id: Uuid, object_id: Uuid, fields: Arc<[ObjectField]>) -> DBResult<usize> {
+        self.set_objects(transaction_id, [(object_id, fields)])
     }
 
     /// Sets the state of the objects with the given ids to the given states
-    pub fn set_objects<'a>(&mut self, objects: impl IntoIterator<Item = (Uuid, ObjectState<'a>)>) -> DBResult<usize> {
+    pub fn set_objects(&mut self, transaction_id: Uuid, objects: impl IntoIterator<Item = (Uuid, Arc<[ObjectField]>)>) -> DBResult<usize> {
         let entries = objects
             .into_iter()
-            .map(|(id, state)| LogEntry::new(id, state))
+            .map(|(id, state)| if state.is_empty() { EntityEntry::Deleted(id) } else { EntityEntry::Updated(id, state) })
             .collect_vec();
 
         if let Some(value_entry) = self.get_any_entry_data()? {
             let error_entry = entries
                 .iter()
                 .find(|e| matches!(
-                    e.entry_data().is_same_shape(&value_entry),
+                    e.is_same_shape(&value_entry),
                     Break(false)
                 ));
             if let Some(e) = error_entry {
@@ -82,14 +70,16 @@ impl Collection {
             }
         }
 
-        let arena = Bump::new();
-
+        let mut newest_file = self.get_file(self.last_file_index)?.ok_or(StorageError::Inconsistency())?;
         let max_entries = self.config.storage_config.log_file.max_entries;
-        let mut leftover = max_entries - self.last_file_entries;
+
+        let mut leftover = max_entries - newest_file.read()?.len();
         let mut appends = 0;
+
+        let mut entries_left = entries.len();
         for chunk in entries.into_iter()
             .batching(|iter| {
-                let vec = iter.take(leftover).collect_in::<Vec<_>>(&arena);
+                let vec = iter.take(leftover).collect::<Vec<_>>();
                 if vec.is_empty() {
                     None
                 } else {
@@ -97,19 +87,15 @@ impl Collection {
                     Some(vec)
                 }
             }) {
-            let last_id = self.last_file_id();
-            let last_file_data = &self.log_files[last_id];
+            let added_entries = LogFile::append_entries(&newest_file, &self.config, chunk.into_iter().map(|e| LogEntry::Entity(transaction_id, e)))?;
 
-            last_file_data.2.borrow_mut().take();
-            LogFile::append_entries(&self.config, last_id, chunk.iter())?;
-            appends += chunk.len();
-    
-            self.last_file_entries += chunk.len();
+            appends += added_entries;
+            entries_left -= added_entries;
 
-            if self.last_file_entries >= self.config.storage_config.log_file.max_entries {
-                *last_file_data.2.borrow_mut() = Some(LogFile::load_from_path(&last_file_data.0)?.into());
-                self.log_files.push(LogFile::create_next_log_file(&mut self.config)?);
-                self.last_file_entries = 0;
+            if entries_left > 0 {
+                self.last_file_index += 1;
+                self.config.ensure_file_exists(self.last_file_index)?;
+                newest_file = self.get_file(self.last_file_index)?.ok_or(StorageError::Inconsistency())?;
             }
         }
 
@@ -118,54 +104,50 @@ impl Collection {
         Ok(appends)
     }
 
-    pub fn get_file<'c, 'bump: 'c>(&'c self, index: usize, arena: &'bump Bump) -> Option<DBResult<LogFile<'bump>>> {
-        let data = self.log_files.get(index)?;
-
-        if data.2.borrow().is_none() {
-            match LogFile::load_from_path(&data.0) {
-                Ok(map) => {
-                    data.2.replace(Some(map.into()));
-                },
-                Err(err) => return Some(Err(err)),
-            };
+    pub fn get_file(&self, index: usize) -> DBResult<Option<Arc<LogFile>>> {
+        match self.log_files
+            .lock()?
+            .get_or_insert_fallible(index, || LogFile::load_log_file(&self.config, index).map(Arc::new)) {
+            Ok(Some(file)) => Ok(Some(file.clone())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
         }
-
-        Some(LogFile::deserialize(arena, data.2.borrow().as_ref().unwrap()))
     }
 
-    fn get_any_entry_data(&self) -> DBResult<Option<ObjectState<'_>>> {
+    fn get_any_entry_data(&self) -> DBResult<Option<EntityEntry>> {
         match NativeCollectionIterator::new(self).next() {
             None => Ok(None),
-            Some(Ok(e)) => Ok(Some(e)),
+            Some(Ok((id, values))) => Ok(Some(EntityEntry::Updated(id, values))),
             Some(Err(err)) => Err(err)
         }
-    }
-
-    fn last_file_id(&self) -> usize {
-        self.log_files.last().map_or(0, |(_, i, _)| *i)
     }
 
     pub fn iterate<'a, Item: Deserialize<'a>>(&'a self) -> CollectionIterator<'a, Item> {
         CollectionIterator::new(NativeCollectionIterator::new(self))
     }
 
+    pub fn iterate_native(&'_ self) -> NativeCollectionIterator<'_> {
+        NativeCollectionIterator::new(self)
+    }
+
     pub fn query<'a, Item: Deserialize<'a> + 'a>(&'a self) -> Query<'a, Item> {
         Query::<Item>::from_collection(self)
     }
 
-    /// Flushes the in-memory cache
-    pub fn flush_cache(&mut self) -> DBResult<()> {
-        for mut f in self.log_files.iter_mut() {
-            f.2 = None.into();
-        }
-        Ok(())
+    pub fn print_debug_info(&self) {
+        let lock = self.log_files.lock().unwrap();
+        println!(
+            "File cache memory usage: {}B/{}B",
+            lock.memory_usage(),
+            lock.limiter().max_memory_usage()
+        );
+        println!("Log file directory: {:#?}", self.config.get_collection_files_destination());
+        println!("Last file index: {:#?}", self.last_file_index);
     }
 
-    pub fn print_debug_info(&self) {
-        println!("File cache memory usage: {}/{}", self.log_files.iter().filter(|f| f.2.borrow().is_some()).count(), self.log_files.len());
-        println!("Log file directory: {:#?}", self.config.get_collection_files_destination());
-        println!("Last log file ID: {}", self.last_file_id());
-        println!("Entries in last file: {}", self.last_file_entries);
+    pub fn clear_cache(&self) {
+        let mut lock = self.log_files.lock().unwrap();
+        lock.clear();
     }
 
 }

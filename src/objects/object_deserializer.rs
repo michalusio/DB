@@ -1,5 +1,4 @@
-use std::marker::PhantomData;
-use bumpalo::collections::Vec;
+use std::{marker::PhantomData, sync::Arc};
 
 use serde::{Deserializer, forward_to_deserialize_any, de::SeqAccess};
 
@@ -8,14 +7,14 @@ use crate::errors::query_error::DeserializerError;
 use super::ObjectField;
 
 pub struct ObjectDeserializer<'a> {
-    data: Vec<'a, ObjectField>,
+    data: Arc<[ObjectField]>,
     index: usize,
     phantom: PhantomData<&'a ObjectField>
 }
 
 impl<'a> ObjectDeserializer<'a> {
     #[inline]
-    pub fn new(data: Vec<'a, ObjectField>) -> Self {
+    pub fn new(data: Arc<[ObjectField]>) -> Self {
         ObjectDeserializer {
             data,
             index: 0,
@@ -38,11 +37,11 @@ impl<'de> Deserializer<'de> for &mut ObjectDeserializer<'de> {
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where V: serde::de::Visitor<'de> {
         match self.next_item() {
-            Some(ObjectField::String(s)) => visitor.visit_borrowed_str(s),
+            Some(ObjectField::String(s)) => visitor.visit_str(s),
             Some(ObjectField::I32(i)) => visitor.visit_i32(*i),
             Some(ObjectField::I64(i)) => visitor.visit_i64(*i),
             Some(ObjectField::Decimal(d)) => visitor.visit_f64(*d),
-            Some(ObjectField::Bytes(b)) => visitor.visit_borrowed_bytes(b),
+            Some(ObjectField::Bytes(b)) => visitor.visit_bytes(b),
             Some(ObjectField::Id(id)) => visitor.visit_bytes(id.as_bytes()),
             Some(ObjectField::Bool(b)) => visitor.visit_bool(*b),
             None => Err(DeserializerError::from_str("Error - no more columns in row")),
@@ -91,11 +90,10 @@ impl<'de> SeqAccess<'de> for ObjectDeserializer<'de> {
 
 #[cfg(test)]
 mod tests {
-    use bumpalo::{vec, Bump};
     use serde::Deserialize;
     use serial_test::serial;
 
-    use crate::objects::{ObjectDeserializer, ObjectField};
+    use crate::{objects::ObjectDeserializer, ObjectField};
 
     #[test]
     #[serial]
@@ -107,15 +105,13 @@ mod tests {
             c: f64
         }
 
-        let arena = Bump::new();
-
-        let data = vec![in &arena;
+        let data = vec![
             ObjectField::I64(12),
-            ObjectField::String("test string"),
+            ObjectField::String("test string".into()),
             ObjectField::Decimal(4.55)
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data);
+        let mut deserializer = ObjectDeserializer::new(data.into());
         let t = TestStruct::deserialize(&mut deserializer).unwrap();
 
         assert_eq!(12, t.a);
@@ -133,16 +129,14 @@ mod tests {
             c: f64
         }
 
-        let arena = Bump::new();
-
-        let data = vec![in &arena;
+        let data = vec![
             ObjectField::I64(12),
-            ObjectField::String("test string"),
+            ObjectField::String("test string".into()),
             ObjectField::Decimal(4.55),
             ObjectField::I32(5),
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data);
+        let mut deserializer = ObjectDeserializer::new(data.into());
         let t = TestStruct::deserialize(&mut deserializer).unwrap();
 
         assert_eq!(12, t.a);
@@ -160,14 +154,12 @@ mod tests {
             c: f64
         }
 
-        let arena = Bump::new();
-
-        let data = vec![in &arena;
+        let data = vec![
             ObjectField::I64(12),
-            ObjectField::String("test string")
+            ObjectField::String("test string".into())
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data);
+        let mut deserializer = ObjectDeserializer::new(data.into());
         let res = TestStruct::deserialize(&mut deserializer);
 
         assert!(res.is_err());
@@ -182,14 +174,12 @@ mod tests {
             b: String
         }
 
-        let arena = Bump::new();
-
-        let data = vec![in &arena;
+        let data = vec![
             ObjectField::I32(12),
-            ObjectField::String("test string"),
+            ObjectField::String("test string".into()),
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data);
+        let mut deserializer = ObjectDeserializer::new(data.into());
         let t = TestStruct::deserialize(&mut deserializer).unwrap();
 
         assert_eq!(12, t.a);

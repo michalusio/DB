@@ -10,7 +10,8 @@ pub enum StorageError {
     #[error("Cannot access the caches")] CacheAccess(#[from] CacheAccessError),
     #[error("Cannot load the file")] Io(#[from] std::io::Error),
     #[error("Cannot compress/decompress data")] Compression(#[from] CompressionError),
-    #[error("Data does not keep the schema structure")] Schema(#[from] SchemaError)
+    #[error("Data does not keep the schema structure")] Schema(#[from] SchemaError),
+    #[error("File inconsistency")] Inconsistency()
 }
 
 #[derive(ErrorMacro, Debug)]

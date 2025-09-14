@@ -21,7 +21,7 @@ pub struct LogFileConfig {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CacheConfig {
-    pub file_refs_budget: usize,
+    pub file_budget: usize,
 }
 
 impl Default for LogFileConfig {
@@ -37,7 +37,7 @@ impl Default for LogFileConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            file_refs_budget: 67_108_864
+            file_budget: 67_108_864
         }
     }
 }
