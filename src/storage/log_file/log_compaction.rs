@@ -1,8 +1,8 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{collections::{HashMap, HashSet}};
 use itertools::Itertools;
 use uuid::Uuid;
 
-use crate::{errors::compaction_error::CompactionError, storage::{collection::collection_config::CollectionConfig, log_file::log_entry::{EntityEntry, TransactionEntry}}, utils::DBResult, ObjectField};
+use crate::{collection::collection_config::CollectionConfig, errors::compaction_error::CompactionError, storage::log_file::log_entry::{EntityEntry, TransactionEntry}, utils::{DBResult}, ObjectField};
 
 use super::{LogFile, log_entry::LogEntry};
 
@@ -14,7 +14,7 @@ pub fn compact_files(older_index: usize, newer_index: usize, config: &Collection
     save_compacted_entries(entries, older, newer, config)
 }
 
-fn save_compacted_entries(entries: HashMap<Uuid, Option<Arc<[ObjectField]>>>, older: LogFile, newer: LogFile, config: &CollectionConfig) -> DBResult<()> {
+fn save_compacted_entries(entries: HashMap<Uuid, Option<Vec<ObjectField>>>, older: LogFile, newer: LogFile, config: &CollectionConfig) -> DBResult<()> {
     let max_entries = config.storage_config.log_file.max_entries;
     let chunks = entries.into_iter().chunks(max_entries);
 
@@ -31,10 +31,10 @@ fn save_compacted_entries(entries: HashMap<Uuid, Option<Arc<[ObjectField]>>>, ol
     Ok(())
 }
 
-fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBResult<HashMap<Uuid, Option<Arc<[ObjectField]>>>> {
+fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBResult<HashMap<Uuid, Option<Vec<ObjectField>>>> {
     let older_entries = older_entries.read()?;
     let newer_entries = newer_entries.read()?;
-    let mut entries: HashMap<Uuid, Option<Arc<[ObjectField]>>> = HashMap::with_capacity((older_entries.len() + newer_entries.len()) / 2);
+    let mut entries: HashMap<Uuid, Option<Vec<ObjectField>>> = HashMap::with_capacity((older_entries.len() + newer_entries.len()) / 2);
     let mut transactions = HashSet::<Uuid>::new();
     for entry in newer_entries.iter().chain(older_entries.iter()) {
         match entry {

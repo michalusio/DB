@@ -5,6 +5,6 @@
         "compaction_redundancy_percentage": 0.5
     },
     "cache": {
-        "file_budget": 67108864
+        "file_count": 32
     }
 }

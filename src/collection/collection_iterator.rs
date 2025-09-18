@@ -26,7 +26,6 @@ impl<'a, T: Deserialize<'a>> CollectionIterator<'a, T> {
 impl<'a, T: Deserialize<'a>> Iterator for CollectionIterator<'a, T> {
     type Item = DBResult<T>;
 
-    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         match self.iterator.next() {
             None => None,
@@ -40,7 +39,6 @@ impl<'a, T: Deserialize<'a>> Iterator for CollectionIterator<'a, T> {
         }
     }
 
-    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.iterator.size_hint()
     }

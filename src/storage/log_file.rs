@@ -1,9 +1,9 @@
-use std::{fs::{self, File}, io::{Read, Write}, ops::{Deref, DerefMut}, path::PathBuf, sync::RwLock};
+use std::{fs::{self, File}, io::{self, Write}, ops::{Deref, DerefMut}, sync::RwLock};
 
-use crate::{errors::DatabaseError, utils::{SplittableByLengthEncoding, DBResult}};
+use crate::{errors::DatabaseError, utils::{DBResult, SplittableByLengthEncoding}};
 use self::log_entry::LogEntry;
 
-use super::collection::collection_config::CollectionConfig;
+use crate::collection::collection_config::CollectionConfig;
 
 pub mod log_entry;
 pub mod log_position;
@@ -28,31 +28,28 @@ impl DerefMut for LogFile {
 impl LogFile {
     pub fn load_log_file(config: &CollectionConfig, file_index: usize) -> DBResult<LogFile> {
         let log_path = config.get_log_path(file_index);
-        LogFile::load_from_path(&log_path, file_index)
-    }
-
-    #[inline]
-    fn load_from_path(path: &PathBuf, file_index: usize) -> DBResult<LogFile> {
         let mut file = File::options()
             .read(true)
-            .open(path)?;
+            .open(log_path)?;
 
         let mut data = vec![];
-        file.read_to_end(&mut data)?;
+        io::copy(&mut file, &mut data)?;
 
-        Self::deserialize(&data, file_index)
+        Self::deserialize(data, file_index)
     }
 
-    #[inline]
-    fn deserialize(file: &[u8], file_index: usize) -> DBResult<LogFile> {
+    pub fn byte_size(&self) -> u64 {
+        (std::mem::size_of::<Self>() as u64) + self.read().unwrap().iter().map(|e| e.byte_size()).sum::<u64>()
+    }
 
-        let decompressed_data = file
+    fn deserialize(file: Vec<u8>, file_index: usize) -> DBResult<LogFile> {
+        let vector: DBResult<Vec<LogEntry>> = file
             .split_by_length_encoding()
             .map(LogEntry::decompress)
             .map(|r| r.map_err(DatabaseError::from))
-            .collect::<DBResult<Vec<LogEntry>>>()?;
+            .collect();
 
-        Ok(LogFile(decompressed_data.into(), file_index))
+        Ok(LogFile(RwLock::new(vector?), file_index))
     }
     
     pub fn truncate_entries(&self, config: &CollectionConfig, entries: impl Iterator<Item = LogEntry>) -> DBResult<usize> {

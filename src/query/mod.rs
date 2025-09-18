@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, collections::BTreeSet};
 
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::{set, utils::DBResult};
 
@@ -19,15 +20,17 @@ pub struct Query<'a, Item: Deserialize<'a>> {
      * All filters made on the query, in DNF form
      */
     conditions: BTreeSet<Condition>,
+    transaction_id: Uuid,
     phantom: PhantomData<Vec<Item>>
 }
 
 impl<'a, Item: Deserialize<'a> + 'a> Query<'a, Item> {
 
-    pub(crate) fn from_collection(collection: &'a Collection) -> Self {
+    pub(crate) fn from_collection(collection: &'a Collection, transaction_id: Uuid) -> Self {
         Query {
             on: collection,
             conditions: set!(),
+            transaction_id,
             phantom: PhantomData::<Vec<Item>>
         }
     }
@@ -46,6 +49,6 @@ impl<'a, Item: Deserialize<'a> + 'a> Query<'a, Item> {
     }
 
     pub fn collect(self) -> DBResult<Vec<Item>> {
-        self.on.iterate::<Item>().collect()
+        self.on.iterate::<Item>(self.transaction_id).collect()
     }
 }

@@ -20,7 +20,6 @@ impl CollectionStatistics {
         }
     }
 
-    #[inline]
     pub fn approximate_entries(&self) -> usize {
         self.approximate_total_entries - self.approximate_redundant_entries
     }

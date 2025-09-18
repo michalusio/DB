@@ -1,7 +1,7 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, time::Duration};
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use db::{DBResult, ObjectField, Storage};
+use db::{DBResult, Storage};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -21,8 +21,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             .unwrap();
 
         // Setup
-        let data = generate_sample_data(10_000);
+        let data = generate_sample_data(1_000_000);
         collection.set_objects(Uuid::nil(), data).unwrap();
+        collection.print_debug_info();
         collection.clear_cache();
     }
 
@@ -34,35 +35,26 @@ fn criterion_benchmark(c: &mut Criterion) {
         _d: bool,
         _e: Cow<'static, str>
     }
-    
-    c.bench_function("collection iteration (ten thousand entries)", |b| {
-        b.iter(|| {
-            let collection = engine
-                .get_collection("table")
-                .unwrap()
-                .read()
-                .unwrap();
-            let data: DBResult<Vec<(Uuid, Arc<[ObjectField]>)>> = collection.iterate_native().collect();
-            let data = data.unwrap();
-            assert_eq!(data.len(), 10_000);
-            std::mem::drop(data);
-        });
-    });
 
-    c.bench_function("collection iteration (ten thousand entries) with deserialization", |b| {
+    c.bench_function("1M collection iteration with deserialization", |b| {
         b.iter(|| {
             let collection = engine
                 .get_collection("table")
                 .unwrap()
                 .read()
                 .unwrap();
-            let data: DBResult<Vec<TestStruct>> = collection.iterate::<TestStruct>().collect();
+
+            let data: DBResult<Vec<TestStruct>> = collection.iterate::<TestStruct>(Uuid::now_v7()).collect();
             let data = data.unwrap();
-            assert_eq!(data.len(), 10_000);
+            assert_eq!(data.len(), 1_000_000);
             std::mem::drop(data);
         });
     });
 }
 
-criterion_group!(collection_iteration, criterion_benchmark);
-criterion_main!(collection_iteration);
+criterion_group!{
+    name = big_collection_iteration_deserialized;
+    config = Criterion::default().measurement_time(Duration::from_secs(10)).sample_size(15);
+    targets = criterion_benchmark
+}
+criterion_main!(big_collection_iteration_deserialized);

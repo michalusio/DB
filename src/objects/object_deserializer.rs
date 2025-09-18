@@ -1,20 +1,19 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData};
 
 use serde::{Deserializer, forward_to_deserialize_any, de::SeqAccess};
 
-use crate::errors::query_error::DeserializerError;
+use crate::{errors::query_error::DeserializerError};
 
 use super::ObjectField;
 
 pub struct ObjectDeserializer<'a> {
-    data: Arc<[ObjectField]>,
+    data: Vec<ObjectField>,
     index: usize,
     phantom: PhantomData<&'a ObjectField>
 }
 
 impl<'a> ObjectDeserializer<'a> {
-    #[inline]
-    pub fn new(data: Arc<[ObjectField]>) -> Self {
+    pub fn new(data: Vec<ObjectField>) -> Self {
         ObjectDeserializer {
             data,
             index: 0,
@@ -22,7 +21,6 @@ impl<'a> ObjectDeserializer<'a> {
         }
     }
 
-    #[inline]
     fn next_item(&mut self) -> Option<&ObjectField> {
         let item = self.data.get(self.index);
         self.index += 1;
@@ -33,7 +31,6 @@ impl<'a> ObjectDeserializer<'a> {
 impl<'de> Deserializer<'de> for &mut ObjectDeserializer<'de> {
     type Error = DeserializerError;
 
-    #[inline]
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where V: serde::de::Visitor<'de> {
         match self.next_item() {
@@ -48,13 +45,11 @@ impl<'de> Deserializer<'de> for &mut ObjectDeserializer<'de> {
         }
     }
 
-    #[inline]
     fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where V: serde::de::Visitor<'de> {
         visitor.visit_seq(self)
     }
 
-    #[inline]
     fn deserialize_struct<V>(
         self,
         _name: &'static str,
@@ -80,7 +75,6 @@ impl<'de> Deserializer<'de> for &mut ObjectDeserializer<'de> {
 impl<'de> SeqAccess<'de> for ObjectDeserializer<'de> {
     type Error = DeserializerError;
 
-    #[inline]
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
         T: serde::de::DeserializeSeed<'de> {
@@ -91,12 +85,9 @@ impl<'de> SeqAccess<'de> for ObjectDeserializer<'de> {
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;
-    use serial_test::serial;
-
     use crate::{objects::ObjectDeserializer, ObjectField};
 
     #[test]
-    #[serial]
     fn test_deserialization() {
         #[derive(Deserialize)]
         struct TestStruct {
@@ -111,7 +102,7 @@ mod tests {
             ObjectField::Decimal(4.55)
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data.into());
+        let mut deserializer = ObjectDeserializer::new(data);
         let t = TestStruct::deserialize(&mut deserializer).unwrap();
 
         assert_eq!(12, t.a);
@@ -120,7 +111,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_deserialization_more_columns() {
         #[derive(Deserialize)]
         struct TestStruct {
@@ -136,7 +126,7 @@ mod tests {
             ObjectField::I32(5),
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data.into());
+        let mut deserializer = ObjectDeserializer::new(data);
         let t = TestStruct::deserialize(&mut deserializer).unwrap();
 
         assert_eq!(12, t.a);
@@ -145,7 +135,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_deserialization_not_enough_columns() {
         #[derive(Deserialize)]
         struct TestStruct {
@@ -159,14 +148,13 @@ mod tests {
             ObjectField::String("test string".into())
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data.into());
+        let mut deserializer = ObjectDeserializer::new(data);
         let res = TestStruct::deserialize(&mut deserializer);
 
         assert!(res.is_err());
     }
 
     #[test]
-    #[serial]
     fn test_deserialization_different_column_format() {
         #[derive(Deserialize)]
         struct TestStruct {
@@ -179,7 +167,7 @@ mod tests {
             ObjectField::String("test string".into()),
         ];
 
-        let mut deserializer = ObjectDeserializer::new(data.into());
+        let mut deserializer = ObjectDeserializer::new(data);
         let t = TestStruct::deserialize(&mut deserializer).unwrap();
 
         assert_eq!(12, t.a);

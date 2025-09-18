@@ -1,15 +1,15 @@
 use std::{collections::BTreeMap, sync::RwLock};
 
+use crate::collection::collection_config::CollectionConfig;
+use crate::collection::Collection;
 use crate::errors::client_side_error::ClientSideError;
 use crate::errors::client_side_error::{CollectionAlreadyExistsError, CollectionDoesNotExistError};
 use crate::utils::DBResult;
 
-use self::{storage_config::DatabaseConfig, collection::{Collection, collection_config::CollectionConfig}};
+use self::{storage_config::DatabaseConfig};
 
 pub mod storage_config;
-pub mod collection;
 pub mod log_file;
-pub mod query;
 
 pub struct Storage {
     config: DatabaseConfig,

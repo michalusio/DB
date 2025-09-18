@@ -15,14 +15,12 @@ pub enum ObjectField {
     Bool(bool)
 }
 
-#[inline]
 fn take_bytes<const N: usize>(data: &[u8]) -> Result<[u8; N], CompressionError> {
     let bytes: Result<[u8; N], TryFromSliceError> = data[0..N].try_into();
     bytes.map_err(CompressionError::wrap)
 }
 
 impl ObjectField {
-    #[inline]
     pub const fn value_id(&self) -> u8 {
         match self {
             ObjectField::String(_) => 0,
@@ -35,7 +33,14 @@ impl ObjectField {
         }
     }
 
-    #[inline]
+    pub fn byte_size(&self) -> u64 {
+        (std::mem::size_of::<Self>() as u64) + match self {
+            ObjectField::String(s) => s.len() as u64,
+            ObjectField::Bytes(b) => b.len() as u64,
+            _ => 0
+        }
+    }
+
     pub fn compress_to(&self, to: &mut Vec<u8>) {
         to.push(self.value_id());
         match self {
@@ -57,7 +62,6 @@ impl ObjectField {
         }
     }
 
-    #[inline]
     pub fn decompress(data: &[u8]) -> Result<(ObjectField, usize), CompressionError> {
         let id = data[0];
         let data = &data[1..];

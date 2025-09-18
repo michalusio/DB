@@ -5,7 +5,6 @@ pub trait SplittableByLengthEncoding {
 }
 
 impl SplittableByLengthEncoding for [u8] {
-    #[inline]
     fn split_by_length_encoding(&self) -> SplitByLengthEncoding<'_>
     {
         SplitByLengthEncoding::new(self)
@@ -29,7 +28,6 @@ impl<'a> Iterator for SplitByLengthEncoding<'a>
 {
     type Item = &'a [u8];
 
-    #[inline]
     fn next(&mut self) -> Option<&'a [u8]> {
         if self.slice.is_empty() {
             return None;
@@ -46,7 +44,6 @@ impl<'a> Iterator for SplitByLengthEncoding<'a>
         Some(ret)
     }
 
-    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         // If there's only one value inside, we yield one slice.
         // If it matches every other element, we yield (n+1)/2 slices (zero-length slices).

@@ -129,10 +129,10 @@ mod tests {
     use super::Condition;
     use super::Normalizable;
     use crate::set;
-    use crate::storage::query::binary_expression::BinaryExpression;
-    use crate::storage::query::binary_expression::BinaryExpressionType;
-    use crate::storage::query::unary_expression::UnaryExpression;
-    use crate::storage::query::unary_expression::UnaryExpressionType;
+    use crate::query::binary_expression::BinaryExpression;
+    use crate::query::binary_expression::BinaryExpressionType;
+    use crate::query::unary_expression::UnaryExpression;
+    use crate::query::unary_expression::UnaryExpressionType;
 
     #[test]
     fn condition_normalization_test_not_equal() {
