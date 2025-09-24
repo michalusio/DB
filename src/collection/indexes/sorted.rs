@@ -8,7 +8,7 @@ use super::Index;
 pub struct SortedIndex {
     pub column: usize,
     pub descending: bool,
-    pub data: Vec<(ObjectField, Uuid)>
+    pub data: Vec<(ObjectField<'static>, Uuid)>
 }
 
 impl Index for SortedIndex {

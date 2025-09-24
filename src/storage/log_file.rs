@@ -1,6 +1,6 @@
-use std::{fs::{self, File}, io::{self, Write}, ops::{Deref, DerefMut}, sync::RwLock};
+use std::{fs::{self, File}, io::{Read, Write}, ops::{Deref, DerefMut}, rc::Rc, sync::RwLock};
 
-use crate::{errors::DatabaseError, utils::{DBResult, SplittableByLengthEncoding}};
+use crate::{errors::DatabaseError, utils::{DBResult, GuardExtensions, SplittableByLengthEncoding}};
 use self::log_entry::LogEntry;
 
 use crate::collection::collection_config::CollectionConfig;
@@ -8,6 +8,7 @@ use crate::collection::collection_config::CollectionConfig;
 pub mod log_entry;
 pub mod log_position;
 mod log_compaction;
+pub mod entry_fields;
 
 pub struct LogFile(pub(crate) RwLock<Vec<LogEntry>>, pub(crate) usize);
 
@@ -30,26 +31,29 @@ impl LogFile {
         let log_path = config.get_log_path(file_index);
         let mut file = File::options()
             .read(true)
-            .open(log_path)?;
+            .open(&log_path)?;
 
         let mut data = vec![];
-        io::copy(&mut file, &mut data)?;
+        file.read_to_end(&mut data)?;
 
         Self::deserialize(data, file_index)
     }
 
     pub fn byte_size(&self) -> u64 {
-        (std::mem::size_of::<Self>() as u64) + self.read().unwrap().iter().map(|e| e.byte_size()).sum::<u64>()
+        (std::mem::size_of::<Self>() as u64) + self.read().not_poisoned().iter().map(|e| e.byte_size()).sum::<u64>()
     }
 
     fn deserialize(file: Vec<u8>, file_index: usize) -> DBResult<LogFile> {
+        let file: Rc<[u8]> = file.into_boxed_slice().into();
         let vector: DBResult<Vec<LogEntry>> = file
             .split_by_length_encoding()
-            .map(LogEntry::decompress)
+            .map(|(rc, range)| LogEntry::decompress(rc, range))
             .map(|r| r.map_err(DatabaseError::from))
             .collect();
 
-        Ok(LogFile(RwLock::new(vector?), file_index))
+        let vector = vector?;
+
+        Ok(LogFile(RwLock::new(vector), file_index))
     }
     
     pub fn truncate_entries(&self, config: &CollectionConfig, entries: impl Iterator<Item = LogEntry>) -> DBResult<usize> {
@@ -67,11 +71,11 @@ impl LogFile {
             fs::File::options()
                 .write(true)
                 .truncate(true)
-                .open(file_path)
+                .open(&file_path)
         } else {
             fs::File::options()
                 .append(true)
-                .open(file_path)
+                .open(&file_path)
         }?;
 
         let mut entries_count = 0;
@@ -84,13 +88,12 @@ impl LogFile {
             file.write_all(compressed_length.as_ref())?;
             file.write_all(&store)?;
             lock.push(entry);
-            
             entries_count += 1;
             store.clear();
         }
     
         file.sync_data()?;
-    
+
         Ok(entries_count)
     }
 

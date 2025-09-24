@@ -1,5 +1,9 @@
 {
     "files.exclude": {
-        "**/target": true
-    }
+        "**/logfile": true,
+        "**/target": true,
+        "/logfile": true
+    },
+    "files.insertFinalNewline": true,
+    "workbench.startupEditor": "none"
 }

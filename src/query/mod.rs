@@ -8,6 +8,7 @@ use crate::{set, utils::DBResult};
 use self::condition::{Condition, Normalizable};
 
 use super::collection::Collection;
+use crate::operators::DBOperator;
 
 pub mod condition;
 pub mod binary_expression;
@@ -49,6 +50,6 @@ impl<'a, Item: Deserialize<'a> + 'a> Query<'a, Item> {
     }
 
     pub fn collect(self) -> DBResult<Vec<Item>> {
-        self.on.iterate::<Item>(self.transaction_id).collect()
+        self.on.table_scan(self.transaction_id).deserialize::<Item>().collect()
     }
 }

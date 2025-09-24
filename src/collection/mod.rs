@@ -2,26 +2,25 @@ use std::{ops::ControlFlow::Break, sync::{Arc, Mutex}};
 
 use bytesize::ByteSize;
 use itertools::Itertools;
+use log::{info};
 use schnellru::{ByLength, LruMap};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{errors::storage_error::{SchemaError, StorageError}, query::Query, storage::log_file::{log_entry::{EntityEntry, LogEntry}, LogFile}, utils::{DBResult}, ObjectField};
+use crate::{errors::storage_error::{SchemaError, StorageError}, operators::TableScan, query::Query, storage::log_file::{log_entry::{EntityEntry, LogEntry}, LogFile}, utils::{DBResult, GuardExtensions}, DBOperator, EntryFields, Row};
 
-use self::{collection_config::CollectionConfig, indexes::WrappedIndex, collection_statistics::CollectionStatistics, collection_iterator::CollectionIterator, native_collection_iterator::NativeCollectionIterator};
+use self::{collection_config::CollectionConfig, indexes::WrappedIndex, collection_statistics::CollectionStatistics};
 
 pub mod collection_config;
 mod collection_statistics;
 mod indexes;
-mod native_collection_iterator;
-mod collection_iterator;
 
 pub struct Collection {
-    last_file_index: usize,
+    pub(crate) last_file_index: usize,
     log_files: Mutex<LruMap<usize, Arc<LogFile>, ByLength>>,
-    config: CollectionConfig,
+    pub config: CollectionConfig,
     indexes: Vec<WrappedIndex>,
-    statistics: CollectionStatistics
+    pub(crate) statistics: CollectionStatistics
 }
 
 impl Collection {
@@ -47,15 +46,15 @@ impl Collection {
     }
 
     /// Sets the state of the object with the given id to the given state
-    pub fn set_object(&mut self, transaction_id: Uuid, object_id: Uuid, fields: Vec<ObjectField>) -> DBResult<usize> {
-        self.set_objects(transaction_id, [(object_id, fields)])
+    pub fn set_object(&mut self, transaction_id: Uuid, object_id: Uuid, fields: EntryFields) -> DBResult<usize> {
+        self.set_objects(transaction_id, [Row { id: object_id, fields }])
     }
 
     /// Sets the state of the objects with the given ids to the given states
-    pub fn set_objects(&mut self, transaction_id: Uuid, objects: impl IntoIterator<Item = (Uuid, Vec<ObjectField>)>) -> DBResult<usize> {
+    pub fn set_objects(&mut self, transaction_id: Uuid, objects: impl IntoIterator<Item = Row>) -> DBResult<usize> {
         let entries = objects
             .into_iter()
-            .map(|(id, state)| if state.is_empty() { EntityEntry::Deleted(id) } else { EntityEntry::Updated(id, state) })
+            .map(|row| if row.fields.is_empty() { EntityEntry::Deleted(row.id) } else { EntityEntry::Updated(row) })
             .collect_vec();
 
         if let Some(value_entry) = self.get_any_entry_data()? {
@@ -106,7 +105,8 @@ impl Collection {
 
     pub fn get_file(&self, index: usize) -> DBResult<Option<Arc<LogFile>>> {
         match self.log_files
-            .lock()?
+            .lock()
+            .not_poisoned()
             .get_or_insert_fallible(index, || LogFile::load_log_file(&self.config, index).map(Arc::new)) {
             Ok(Some(file)) => Ok(Some(file.clone())),
             Ok(None) => Ok(None),
@@ -115,19 +115,15 @@ impl Collection {
     }
 
     fn get_any_entry_data(&self) -> DBResult<Option<EntityEntry>> {
-        match NativeCollectionIterator::new(self, Uuid::max()).next() {
-            None => Ok(None),
-            Some(Ok((id, values))) => Ok(Some(EntityEntry::Updated(id, values))),
-            Some(Err(err)) => Err(err)
+        match TableScan::new(self, Uuid::max()).next() {
+            Ok(Some(row)) => Ok(Some(EntityEntry::Updated(row))),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err)
         }
     }
 
-    pub fn iterate<'a, Item: Deserialize<'a>>(&'a self, transaction_id: Uuid) -> CollectionIterator<'a, Item> {
-        CollectionIterator::new(self.iterate_native(transaction_id))
-    }
-
-    pub fn iterate_native(&self, transaction_id: Uuid) -> NativeCollectionIterator<'_> {
-        NativeCollectionIterator::new(self, transaction_id)
+    pub fn table_scan(&self, transaction_id: Uuid) -> TableScan<'_> {
+        TableScan::new(self, transaction_id)
     }
 
     pub fn query<'a, Item: Deserialize<'a> + 'a>(&'a self, transaction_id: Uuid) -> Query<'a, Item> {
@@ -136,24 +132,24 @@ impl Collection {
 
     pub fn print_debug_info(&self) {
         let usage = self.get_file_cache_usage();
-        println!("File cache usage: {}/{}", usage.0, usage.1);
-        println!("File cache memory usage: {}", ByteSize::b(self.get_file_cache_memory_usage()).display());
-        println!("Log file directory: {:#?}", self.config.get_collection_files_destination());
-        println!("Last file index: {:#?}", self.last_file_index);
+        info!("File cache usage: {}/{}", usage.0, usage.1);
+        info!("File cache memory usage: {}", ByteSize::b(self.get_file_cache_memory_usage()).display());
+        info!("Log file directory: {:#?}", self.config.get_collection_files_destination());
+        info!("Last file index: {:#?}", self.last_file_index);
     }
 
     pub fn clear_cache(&self) {
-        let mut lock = self.log_files.lock().unwrap();
+        let mut lock = self.log_files.lock().not_poisoned();
         lock.clear();
     }
 
     pub fn get_file_cache_usage(&self) -> (usize, u32) {
-        let lock = self.log_files.lock().unwrap();
+        let lock = self.log_files.lock().not_poisoned();
         (lock.len(), lock.limiter().max_length())
     }
 
     pub fn get_file_cache_memory_usage(&self) -> u64 {
-        self.log_files.lock().unwrap().iter().map(|e| e.1.byte_size()).sum()
+        self.log_files.lock().not_poisoned().iter().map(|e| e.1.byte_size()).sum()
     }
 
 }

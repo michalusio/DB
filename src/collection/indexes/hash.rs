@@ -9,7 +9,7 @@ use super::Index;
 #[derive(Clone, Debug)]
 pub struct HashIndex {
     pub column: usize,
-    pub data: HashMap<ObjectField, Vec<Uuid>>
+    pub data: HashMap<ObjectField<'static>, Vec<Uuid>>
 }
 
 impl Index for HashIndex {

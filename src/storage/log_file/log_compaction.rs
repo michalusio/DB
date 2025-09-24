@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}};
 use itertools::Itertools;
 use uuid::Uuid;
 
-use crate::{collection::collection_config::CollectionConfig, errors::compaction_error::CompactionError, storage::log_file::log_entry::{EntityEntry, TransactionEntry}, utils::{DBResult}, ObjectField};
+use crate::{collection::collection_config::CollectionConfig, errors::compaction_error::CompactionError, storage::log_file::{entry_fields::EntryFields, log_entry::{EntityEntry, Row, TransactionEntry}}, utils::DBResult};
 
 use super::{LogFile, log_entry::LogEntry};
 
@@ -14,7 +14,7 @@ pub fn compact_files(older_index: usize, newer_index: usize, config: &Collection
     save_compacted_entries(entries, older, newer, config)
 }
 
-fn save_compacted_entries(entries: HashMap<Uuid, Option<Vec<ObjectField>>>, older: LogFile, newer: LogFile, config: &CollectionConfig) -> DBResult<()> {
+fn save_compacted_entries(entries: HashMap<Uuid, Option<EntryFields>>, older: LogFile, newer: LogFile, config: &CollectionConfig) -> DBResult<()> {
     let max_entries = config.storage_config.log_file.max_entries;
     let chunks = entries.into_iter().chunks(max_entries);
 
@@ -24,23 +24,23 @@ fn save_compacted_entries(entries: HashMap<Uuid, Option<Vec<ObjectField>>>, olde
         }
         let file = if index == 0 { &older } else { &newer };
         LogFile::truncate_entries(file, config, chunk.filter_map(|(id, values)| {
-            values.map(|v| LogEntry::update(Uuid::nil(), id, v))
+            values.map(|v| LogEntry::Entity(Uuid::nil(), EntityEntry::Updated(Row { id, fields: v })))
         }))?;
     }
 
     Ok(())
 }
 
-fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBResult<HashMap<Uuid, Option<Vec<ObjectField>>>> {
+fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBResult<HashMap<Uuid, Option<EntryFields>>> {
     let older_entries = older_entries.read()?;
     let newer_entries = newer_entries.read()?;
-    let mut entries: HashMap<Uuid, Option<Vec<ObjectField>>> = HashMap::with_capacity((older_entries.len() + newer_entries.len()) / 2);
+    let mut entries: HashMap<Uuid, Option<EntryFields>> = HashMap::with_capacity((older_entries.len() + newer_entries.len()) / 2);
     let mut transactions = HashSet::<Uuid>::new();
     for entry in newer_entries.iter().chain(older_entries.iter()) {
         match entry {
-            LogEntry::Entity(transaction_id, EntityEntry::Updated(entry_id,  values)) => {
+            LogEntry::Entity(transaction_id, EntityEntry::Updated(row)) => {
                 if transactions.contains(transaction_id) {
-                    entries.entry(*entry_id).or_insert_with(|| Some(values.clone()));
+                    entries.entry(row.id).or_insert_with(|| Some(row.fields.clone()));
                 }
             },
             LogEntry::Entity(transaction_id, EntityEntry::Deleted(entry_id)) => {

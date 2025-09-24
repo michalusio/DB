@@ -1,4 +1,5 @@
 use std::{path::{Path, PathBuf}, fs};
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string};
 
@@ -47,12 +48,14 @@ impl DatabaseConfig {
         Self::ensure()?;
         let data = fs::read_to_string(STORAGE_CONFIG)?;
         let config = from_str(&data)?;
+        debug!("DB Config loaded");
         Ok(config)
     }
 
     pub fn save(&self) -> DBResult<()> {
         let serialized_config = to_string(self)?;
         fs::write(STORAGE_CONFIG, serialized_config)?;
+        debug!("DB Config saved");
         Ok(())
     }
 
@@ -61,6 +64,7 @@ impl DatabaseConfig {
         if !Path::is_file(config_path) {
             let config = DatabaseConfig::default();
             config.save()?;
+            info!("DB Config did not exist - created with defaults");
         }
         Ok(())
     }

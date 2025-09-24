@@ -1,15 +1,16 @@
 use std::{borrow::Cow, time::Duration};
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use db::{DBResult, Storage};
+use db::{DBOperator, DBResult, Storage};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::utils::{wipe_log_files, generate_sample_data};
+use crate::utils::{generate_sample_data, init_benchmark, wipe_log_files};
 
 mod utils;
 
 fn criterion_benchmark(c: &mut Criterion) {
+    init_benchmark();
     wipe_log_files();
     let mut engine = Storage::new().unwrap();
 
@@ -28,12 +29,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     #[derive(Deserialize)]
-    struct TestStruct {
-        _a: Cow<'static, str>,
+    struct TestStruct<'a> {
+        _a: Cow<'a, str>,
         _b: i32,
         _c: f64,
         _d: bool,
-        _e: Cow<'static, str>
+        _e: Cow<'a, str>
     }
 
     c.bench_function("1M collection iteration with deserialization", |b| {
@@ -44,10 +45,14 @@ fn criterion_benchmark(c: &mut Criterion) {
                 .read()
                 .unwrap();
 
-            let data: DBResult<Vec<TestStruct>> = collection.iterate::<TestStruct>(Uuid::now_v7()).collect();
+            let data: DBResult<Vec<TestStruct>> = collection
+                .table_scan(Uuid::now_v7())
+                .deserialize::<TestStruct>()
+                .collect();
             let data = data.unwrap();
             assert_eq!(data.len(), 1_000_000);
             std::mem::drop(data);
+            collection.clear_cache();
         });
     });
 }

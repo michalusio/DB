@@ -1,13 +1,38 @@
 use std::{borrow::Cow};
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use db::{DBOperator, DBResult, Storage};
+use db::{DBOperator, DBResult, ObjectField, Row, Storage};
 use serde::Deserialize;
 use uuid::Uuid;
+use fakeit::{name};
 
-use crate::utils::{generate_sample_data, init_benchmark, wipe_log_files};
+use crate::utils::{init_benchmark, wipe_log_files};
 
 mod utils;
+
+pub fn generate_sample_data(n: u32) -> Vec<Row> {
+    let data: Vec<Row> = (0..n)
+    .map(|_| {
+        let id = Uuid::new_v4();
+        let first = name::first();
+        let last = name::last();
+        
+        let state = vec![
+            first.into(),
+            last.into(),
+            ObjectField::I32(rand::random()),
+            ObjectField::Decimal(rand::random::<f64>() * 1000.0),
+            ObjectField::Bool(rand::random()),
+            ObjectField::Id(Uuid::new_v4()),
+            ObjectField::I32(rand::random()),
+            ObjectField::I32(rand::random()),
+            ObjectField::I32(rand::random()),
+        ];
+        Row { id, fields: state.into() }
+    })
+    .collect();
+    data
+}
 
 fn criterion_benchmark(c: &mut Criterion) {
     init_benchmark();
@@ -31,13 +56,17 @@ fn criterion_benchmark(c: &mut Criterion) {
     #[derive(Deserialize)]
     struct TestStruct<'a> {
         _a: Cow<'a, str>,
-        _b: i32,
-        _c: f64,
-        _d: bool,
-        _e: Cow<'a, str>
+        _b: Cow<'a, str>,
+        _c: i32,
+        _d: f64,
+        _e: bool,
+        _f: Uuid,
+        _g: i32,
+        _h: i32,
+        _i: i32
     }
 
-    c.bench_function("10K collection iteration with deserialization", |b| {
+    c.bench_function("10K collection iteration with a lot of random columns", |b| {
         b.iter(|| {
             let collection = engine
                 .get_collection("table")
@@ -57,8 +86,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 criterion_group!{
-    name = collection_iteration_deserialized;
+    name = collection_iteration_random;
     config = Criterion::default();
     targets = criterion_benchmark
 }
-criterion_main!(collection_iteration_deserialized);
+criterion_main!(collection_iteration_random);

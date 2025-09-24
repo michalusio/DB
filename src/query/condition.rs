@@ -17,7 +17,7 @@ pub enum Condition {
     Binary(BinaryExpression),
 
     Column(&'static str),
-    Value(ObjectField)
+    Value(ObjectField<'static>)
 }
 
 impl Normalizable for Condition {
@@ -126,6 +126,8 @@ impl Display for Condition {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::parallel;
+
     use super::Condition;
     use super::Normalizable;
     use crate::set;
@@ -135,6 +137,7 @@ mod tests {
     use crate::query::unary_expression::UnaryExpressionType;
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_not_equal() {
         let c = Condition::And(
             set![
@@ -156,6 +159,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_double_negation() {
         let c = Condition::Unary(
             UnaryExpression {
@@ -175,6 +179,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_or_demorgan() {
         let c = Condition::Unary(
             UnaryExpression {
@@ -195,6 +200,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_and_demorgan() {
         let c = Condition::Unary(
             UnaryExpression {
@@ -215,6 +221,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_and() {
         let c = Condition::And(
             set![
@@ -243,6 +250,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_or_and() {
         let c = Condition::And(
             set![
@@ -283,6 +291,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_and_or() {
         let c = Condition::Or(
             set![
@@ -323,6 +332,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_and_or_three() {
         let c = Condition::Or(
             set![
@@ -345,6 +355,7 @@ mod tests {
     }
 
     #[test]
+    #[parallel]
     fn condition_normalization_test_full() {
         let c = Condition::Unary(UnaryExpression {
             expression_type: UnaryExpressionType::Not,

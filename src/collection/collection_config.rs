@@ -1,6 +1,8 @@
 use std::{ffi::OsString, fs, path::{Path, PathBuf}};
 
 use itertools::Itertools;
+use log::debug;
+use log_err::LogErrOption;
 
 use crate::{storage::{storage_config::DatabaseConfig}, utils::DBResult};
 
@@ -18,19 +20,19 @@ impl CollectionConfig {
     pub fn ensure_folder_exists(&mut self) -> DBResult<()> {
         let path = self.get_collection_files_destination();
         if !Path::is_dir(&path) {
-            Ok(fs::create_dir(path)?)
-        } else {
-            Ok(())
+            fs::create_dir(path)?;
+            debug!("Created collection folder for {}", self.collection_name);
         }
+        Ok(())
     }
 
     pub fn ensure_folder_not_exists(&mut self) -> DBResult<()> {
         let path = self.get_collection_files_destination();
-        if !Path::is_dir(&path) {
-            Ok(())
-        } else {
-            Ok(fs::remove_dir_all(path)?)
+        if Path::is_dir(&path) {
+            fs::remove_dir_all(path)?;
+            debug!("Removed collection folder for {}", self.collection_name);
         }
+        Ok(())
     }
 
     pub fn ensure_file_exists(&mut self, index: usize) -> DBResult<()> {
@@ -39,6 +41,7 @@ impl CollectionConfig {
             .create(true)
             .append(true)
             .open(&path)?;
+        debug!("File {} of collection {} created", index, self.collection_name);
         Ok(())
     }
 
@@ -58,7 +61,7 @@ impl CollectionConfig {
                 let os_string = path
                     .file_name()
                     .map(|f|f.to_os_string())
-                    .expect("A file with an invalid path??");
+                    .log_expect("A file with an invalid path??");
                 (path, os_string)
             })
             .filter_map(|(path, filename)| get_logfile_id(filename).map(|id|(path, id)))

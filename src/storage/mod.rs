@@ -1,5 +1,8 @@
 use std::{collections::BTreeMap, sync::RwLock};
 
+use log::debug;
+use log_err::LogErrOption;
+
 use crate::collection::collection_config::CollectionConfig;
 use crate::collection::Collection;
 use crate::errors::client_side_error::ClientSideError;
@@ -35,7 +38,7 @@ impl Storage {
 
     pub fn create_collection(&mut self, name: &str) -> DBResult<&RwLock<Collection>> {
         if self.collections.contains_key(name) {
-            Ok(self.get_collection(name).expect("Just checked the key"))
+            Ok(self.get_collection(name).log_expect("Just checked the key"))
         } else {
             self.create_new_collection(name)
         }
@@ -43,6 +46,7 @@ impl Storage {
 
     pub fn create_new_collection(&mut self, name: &str) -> DBResult<&RwLock<Collection>> {
         if self.collections.contains_key(name) {
+            debug!("Collection {} already exists, cannot create again", name);
             Err(ClientSideError::from(CollectionAlreadyExistsError {
                 name: name.to_owned()
             }).into())
@@ -54,7 +58,8 @@ impl Storage {
             };
             let engine = Collection::new(config)?;
             self.collections.insert(owned_name, engine.into());
-            Ok(self.get_collection(name).expect("Just inserted the key"))
+            debug!("Collection {} created", name);
+            Ok(self.get_collection(name).log_expect("Just inserted the key"))
         }
     }
 
@@ -66,8 +71,11 @@ impl Storage {
                 collection_name: owned_name,
                 storage_config: self.config.clone()
             };
-            config.ensure_folder_not_exists()
+            config.ensure_folder_not_exists()?;
+            debug!("Collection {} deleted", name);
+            Ok(())
         } else {
+            debug!("Collection {} does not exist, cannot delete", name);
             Err(ClientSideError::from(CollectionDoesNotExistError {
                 name: name.to_owned()
             }).into())

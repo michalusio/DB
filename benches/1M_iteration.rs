@@ -1,14 +1,15 @@
 use std::{time::Duration};
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use db::{DBResult, ObjectField, Storage};
+use db::{DBOperator, DBResult, Row, Storage};
 use uuid::Uuid;
 
-use crate::utils::{wipe_log_files, generate_sample_data};
+use crate::utils::{generate_sample_data, init_benchmark, wipe_log_files};
 
 mod utils;
 
 fn criterion_benchmark(c: &mut Criterion) {
+    init_benchmark();
     wipe_log_files();
     let mut engine = Storage::new().unwrap();
 
@@ -34,7 +35,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 .read()
                 .unwrap();
 
-            let data: DBResult<Vec<(Uuid, Vec<ObjectField>)>> = collection.iterate_native(Uuid::now_v7()).collect();
+            let data: DBResult<Vec<Row>> = collection.table_scan(Uuid::now_v7()).collect();
             let data = data.unwrap();
             assert_eq!(data.len(), 1_000_000);
             std::mem::drop(data);

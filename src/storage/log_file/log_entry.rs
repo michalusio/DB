@@ -1,6 +1,7 @@
-use std::{array::TryFromSliceError, ops::ControlFlow};
+use std::{ops::{ControlFlow, Range}, rc::Rc};
+use log_err::LogErrResult;
 use uuid::Uuid;
-use crate::{errors::storage_error::CompressionError, ObjectField};
+use crate::{errors::storage_error::CompressionError, storage::log_file::entry_fields::EntryFields};
 
 #[derive(Clone)]
 pub enum LogEntry {
@@ -10,8 +11,14 @@ pub enum LogEntry {
 
 #[derive(Clone)]
 pub enum EntityEntry {
-    Updated(Uuid, Vec<ObjectField>),
+    Updated(Row),
     Deleted(Uuid)
+}
+
+#[derive(Clone)]
+pub struct Row {
+    pub id: Uuid,
+    pub fields: EntryFields
 }
 
 #[derive(Clone)]
@@ -21,8 +28,8 @@ pub enum TransactionEntry {
 }
 
 impl LogEntry {
-    pub fn update(transaction_id: Uuid, entity_id: Uuid, fields: Vec<ObjectField>) -> Self {
-        LogEntry::Entity(transaction_id, EntityEntry::Updated(entity_id, fields))
+    pub fn update(transaction_id: Uuid, entity_id: Uuid, fields: EntryFields) -> Self {
+        LogEntry::Entity(transaction_id, EntityEntry::Updated(Row { id: entity_id, fields }))
     }
 
     pub fn delete(transaction_id: Uuid, entity_id: Uuid) -> Self {
@@ -53,12 +60,11 @@ impl LogEntry {
                         store.push(0);
                         store.extend(id.as_bytes());
                     },
-                    EntityEntry::Updated(id, values) => {
-                        store.push(values.len() as u8);
-                        store.extend_from_slice(id.as_bytes());
-                        for value in values.iter() {
-                            value.compress_to(store);
-                        }
+                    EntityEntry::Updated(row) => {
+                        store.push(1);
+                        store.extend_from_slice(row.id.as_bytes());
+                        let range = &row.fields.0;
+                        store.extend_from_slice(&row.fields.1[range.start..range.end]);
                     }
                 }
             },
@@ -66,48 +72,37 @@ impl LogEntry {
                 store.extend(transaction_id.as_bytes());
                 match transaction {
                     TransactionEntry::Committed => {
-                        store.push(254);
+                        store.push(2);
                     },
                     TransactionEntry::Rollbacked => {
-                        store.push(255);
+                        store.push(3);
                     }
                 }
             }
         }
     }
 
-    pub fn decompress(data: &[u8]) -> Result<LogEntry, CompressionError> {
-        let transaction_id = decompress_uuid(data)?;
-        let mut data = &data[16..];
-        let kind = data[0];
-        data = &data[1..];
+    pub fn decompress(rc: Rc<[u8]>, range: Range<usize>) -> Result<LogEntry, CompressionError> {
+        let data = &rc[range.start..];
+        let transaction_id = Uuid::from_bytes(data[0..16].try_into().log_unwrap());
+        let kind = data[16];
         match kind {
             0 => {
-                let id = decompress_uuid(data)?;
+                let id = Uuid::from_bytes(data[17..][0..16].try_into().log_unwrap());
                 Ok(LogEntry::Entity(transaction_id, EntityEntry::Deleted(id)))
             },
-            254 => {
+            2 => {
                 Ok(LogEntry::Transaction(transaction_id, TransactionEntry::Committed))
             },
-            255 => {
+            3 => {
                 Ok(LogEntry::Transaction(transaction_id, TransactionEntry::Rollbacked))
             },
-            n => {
-                let n = n as usize;
-                let id = decompress_uuid(data)?;
-                data = &data[16..];
+            1 => {
+                let id = Uuid::from_bytes(data[17..][0..16].try_into().log_unwrap());
 
-                let mut fields: Vec<ObjectField> = Vec::with_capacity(n);
-                
-                for _ in 0..n {
-                    let (field, offset) = ObjectField::decompress(data)?;
-                    fields.push(field);
-                    data = &data[offset+1..];
-                }
-
-                
-                Ok(LogEntry::Entity(transaction_id, EntityEntry::Updated(id, fields)))
-            }
+                Ok(LogEntry::Entity(transaction_id, EntityEntry::Updated(Row { id, fields: EntryFields(Range { start: range.start + 33, end: range.end }, rc) })))
+            },
+            _ => unimplemented!()
         }
         
     }
@@ -124,7 +119,7 @@ impl EntityEntry {
 
     pub fn object_id(&self) -> Uuid {
         match self {
-            EntityEntry::Updated(id, _) => *id,
+            EntityEntry::Updated(row) => row.id,
             EntityEntry::Deleted(id) => *id
         }
     }
@@ -140,28 +135,96 @@ impl EntityEntry {
             (EntityEntry::Deleted(_), _) => ControlFlow::Break(true),
             (_, EntityEntry::Deleted(_)) => ControlFlow::Continue(()),
             (
-                EntityEntry::Updated(_, self_values),
-                EntityEntry::Updated(_, other_values)
+                EntityEntry::Updated(self_row),
+                EntityEntry::Updated(other_row)
             ) => {
-                let all_values_are_same_type = self_values
-                    .iter()
-                    .map(ObjectField::value_id)
-                    .eq(other_values.iter().map(ObjectField::value_id));
-                ControlFlow::Break(all_values_are_same_type)
+                let self_values = &self_row.fields;
+                let other_values = &other_row.fields;
+                let self_types = self_values.field_types();
+                let other_types = other_values.field_types();
+                ControlFlow::Break(self_types.eq(other_types))
             },
         }
     }
 
     pub fn byte_size(&self) -> u64 {
         match self {
-            EntityEntry::Updated(_, fields) => fields.iter().map(|f| f.byte_size()).sum(),
+            EntityEntry::Updated(row) => row.fields.byte_size(),
             EntityEntry::Deleted(_) => 0
         }
     }
 }
 
-fn decompress_uuid(data: &[u8]) -> Result<Uuid, CompressionError> {
-    let fixed_uuid_slice: Result<[u8; 16], Box<TryFromSliceError>> = data[0..16].try_into().map_err(Box::new);
-    let fixed_uuid_slice = fixed_uuid_slice.map_err(|e| CompressionError(e));
-    Ok(Uuid::from_bytes(fixed_uuid_slice?))
+impl Row {
+    /// Combines two rows into one, containing all the columns - first the first entries, then the second one's.
+    pub(crate) fn combine(a: &Row, b: &Row) -> Row {
+        Row {
+            id: a.id,
+            fields: EntryFields::combine(&a.fields, &b.fields)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ops::Range, rc::Rc};
+
+    use serial_test::parallel;
+    use uuid::Uuid;
+
+    use crate::{objects::FieldType, storage::log_file::log_entry::{EntityEntry, LogEntry}, ObjectField};
+
+    #[test]
+    #[parallel]
+    fn test_deserialization_serialization() {
+        let mut data: Vec<u8> = vec![
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // Transaction UUID
+            1, // Kind - Update
+            2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, // Entry UUID
+            4, // Fields count
+            FieldType::I64 as u8,
+            FieldType::I32 as u8,
+            FieldType::String as u8,
+            FieldType::Bool as u8,
+            12, 0, 0, 0, 0, 0, 0, 0, // I64 8 bytes,
+            9, 0, 0, 0, // I32 4 bytes
+            13, // String 13 bytes
+        ];
+        data.extend("Hello, World!".as_bytes());
+        data.extend([1]); // Bool 1 byte
+
+        let data: Rc<[u8]> = data.into_boxed_slice().into();
+
+        // testing deserialization
+        let entry = LogEntry::decompress(data.clone(), Range { start: 0, end: data.len()}).unwrap();
+
+        assert_eq!(entry.byte_size(), 136);
+        match entry {
+            LogEntry::Entity(transaction_id, EntityEntry::Updated(ref row)) => {
+                assert_eq!(transaction_id, Uuid::nil());
+                assert_eq!(row.id, Uuid::parse_str("02030203020302030203020302030203").unwrap());
+                assert_eq!(row.fields.len(), 4);
+                
+                let checks = vec![
+                    row.fields.get_field(0),
+                    row.fields.get_field(1),
+                    row.fields.get_field(2),
+                    row.fields.get_field(3)
+                ];
+                let wanted: Vec<ObjectField> = vec![
+                    (12i64).into(),
+                    9.into(),
+                    "Hello, World!".into(),
+                    true.into()
+                ];
+                assert_eq!(checks, wanted);
+            },
+            _ => panic!("entry should be an entity update!")
+        }
+
+        let mut output = vec![];
+        entry.compress_to(&mut output);
+
+        assert_eq!(*output, *data);
+    }
 }

@@ -1,34 +1,33 @@
 use std::{fs};
-
-use db::{ObjectField};
+use db::{ObjectField, Row};
 use uuid::Uuid;
+use fakeit::name;
 
 pub fn wipe_log_files() {
     fs::remove_dir_all("./logfile").unwrap();
     fs::create_dir("./logfile").unwrap();
 }
 
-const STRINGS: [&str; 6] = [
-    "Michał",
-    "Robert",
-    "Marcin",
-    "Jakub",
-    "Mieczysław",
-    "Jormungander"
-];
+pub fn init_benchmark() {
+    unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
+    colog::basic_builder()
+        .filter_level(log::LevelFilter::Debug)
+        .default_format()
+        .init();
+}
 
-pub fn generate_sample_data(n: u32) -> Vec<(Uuid, Vec<ObjectField>)> {
-    let data: Vec<_> = (0..n)
+pub fn generate_sample_data(n: u32) -> Vec<Row> {
+    let data: Vec<Row> = (0..n)
     .map(|_| {
         let id = Uuid::new_v4();
-        let state = vec![
-            ObjectField::String(STRINGS[(rand::random::<u64>() % STRINGS.len() as u64) as usize].into()),
+        let state: Vec<ObjectField> = vec![
+            name::first().into(),
             ObjectField::I32(rand::random()),
             ObjectField::Decimal(rand::random::<f64>() * 1000f64),
             ObjectField::Bool(rand::random()),
-            ObjectField::String(STRINGS[(rand::random::<u64>() % STRINGS.len() as u64) as usize].into())
+            name::last().into()
         ];
-        (id, state)
+        Row { id, fields: state.into() }
     })
     .collect();
     data
