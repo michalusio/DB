@@ -62,4 +62,4 @@ jobs:
     - uses: bencherdev/bencher@main
     - name: Track base branch benchmarks with Bencher
       run: |
-        bencher run --github-actions '${{ secrets.GITHUB_TOKEN }}' --adapter rust_bench "cargo +nightly bench"
+        bencher run --github-actions '${{ secrets.GITHUB_TOKEN }}' --ci-on-the-fly --adapter rust_bench "cargo +nightly bench"
