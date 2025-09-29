@@ -52,8 +52,7 @@ jobs:
 
   benchmarks:
     runs-on: ubuntu-latest
-    permissions:
-      checks: write
+    permissions: write-all
 
     steps:
     - name: Checkout repository
