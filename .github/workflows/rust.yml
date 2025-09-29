@@ -28,7 +28,23 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build project
-      run: cargo build --verbose
+      run: cargo build
 
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test -- -Z unstable-options --format json --report-time | tee test-results.json
+
+    - name: Prepare test report
+      id: cargo_reporter
+      if: always() # always run even if the previous step fails
+      uses: innoq/action-cargo-test-report@main
+      with:
+        cargo-test-report-json: 'test-results.json'
+
+    - name: Publish test report
+      uses: mikepenz/action-junit-report@main
+      if: always() # always run even if the previous step fails
+      with:
+        check_name: Test Report
+        fail_on_failure: true
+        require_tests: true
+        summary: ${{ steps.cargo_reporter.outputs.summary }}
