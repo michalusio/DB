@@ -39,8 +39,8 @@ impl LogFile {
         Self::deserialize(data, file_index)
     }
 
-    pub fn byte_size(&self) -> u64 {
-        (std::mem::size_of::<Self>() as u64) + self.read().not_poisoned().iter().map(|e| e.byte_size()).sum::<u64>()
+    pub fn byte_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.read().not_poisoned().iter().map(|e| e.byte_size()).sum::<usize>()
     }
 
     fn deserialize(file: Vec<u8>, file_index: usize) -> DBResult<LogFile> {

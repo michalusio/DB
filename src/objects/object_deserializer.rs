@@ -256,6 +256,7 @@ mod tests {
     #[parallel]
     fn test_deserialization_not_enough_columns() {
         #[derive(Deserialize)]
+        #[allow(dead_code)]
         struct TestStruct {
             a: i64,
             b: String,

@@ -87,10 +87,18 @@ fn criterion_benchmark(c: &mut Criterion) {
                 .table_scan(transaction)
                 .hash_match(
                     table2.table_scan(transaction),
-                    |row| row.get_field(3).as_i32().unwrap(),
-                    |hashed_row| hashed_row.get_field(0).as_i32().unwrap()
+                    |row| row.column(3).as_i32().unwrap(),
+                    |hashed_row| hashed_row.column(0).as_i32().unwrap()
                 )
-                .in_memory_sort(|row| row.get_field(4).as_i32().unwrap(), SortDirection::Descending)
+                .in_memory_sort(|row| row.column(4).as_i32().unwrap(), SortDirection::Descending)
+                .select(|builder| {
+                    let i = builder.row.column(4).as_i32().unwrap() * 3;
+                    builder
+                        .column(1)
+                        .column(2)
+                        .column(8)
+                        .max_value(i)
+                })
                 .collect()
                 .unwrap();
 

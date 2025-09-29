@@ -82,9 +82,21 @@ impl ObjectField<'_> {
             None
         }
     }
+
+    pub(crate) fn change_lifetime<'a>(self) -> ObjectField<'a> {
+        match self {
+            ObjectField::Bool(b) => ObjectField::Bool(b),
+            ObjectField::I32(i) => ObjectField::I32(i),
+            ObjectField::I64(i) => ObjectField::I64(i),
+            ObjectField::Decimal(d) => ObjectField::Decimal(d),
+            ObjectField::Id(uuid) => ObjectField::Id(uuid),
+            ObjectField::Bytes(cow) => ObjectField::Bytes(cow.into_owned().into()),
+            ObjectField::String(cow) => ObjectField::String(cow.into_owned().into()),
+        }
+    }
 }
 
-const DB_EPSILON: f64 = 0.000001;
+pub(crate) const DB_EPSILON: f64 = 0.000001;
 
 fn check_decimal_equal(a: &f64, b: &f64) -> bool {
     (a.is_nan() && b.is_nan()) || (a - b).abs() < DB_EPSILON
@@ -200,5 +212,17 @@ impl From<Uuid> for ObjectField<'_> {
 impl<'a> From<&'a [u8]> for ObjectField<'a> {
     fn from(value: &'a [u8]) -> Self {
         ObjectField::Bytes(Cow::Borrowed(value))
+    }
+}
+
+impl<'a> From<Cow<'a, [u8]>> for ObjectField<'a> {
+    fn from(value: Cow<'a, [u8]>) -> Self {
+        ObjectField::Bytes(value)
+    }
+}
+
+impl<'a> From<Cow<'a, str>> for ObjectField<'a> {
+    fn from(value: Cow<'a, str>) -> Self {
+        ObjectField::String(value)
     }
 }

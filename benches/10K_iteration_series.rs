@@ -21,7 +21,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // Setup
         let data = generate_sample_data(10_000);
-        let filtered = data.iter().filter(|d| d.fields.get_field(3) == ObjectField::Bool(true)).count();
+        let filtered = data.iter().filter(|d| d.fields.column(3) == ObjectField::Bool(true)).count();
 
         collection.set_objects(Uuid::nil(), data).unwrap();
         collection.print_debug_info();
@@ -39,7 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
             let data: DBResult<Vec<Row>> = collection
                 .table_scan(Uuid::now_v7())
-                .filter(|row| row.get_field(3).as_bool().unwrap())
+                .filter(|row| row.column(3).as_bool().unwrap())
                 .collect();
             let data = data.unwrap();
             assert_eq!(data.len(), true_entries);

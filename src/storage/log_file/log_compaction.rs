@@ -10,11 +10,11 @@ pub fn compact_files(older_index: usize, newer_index: usize, config: &Collection
     let older = LogFile::load_log_file(config, older_index)?;
     let newer = LogFile::load_log_file(config, newer_index)?;
 
-    let entries = compress_log_files(&older, &newer)?;
-    save_compacted_entries(entries, older, newer, config)
+    let (entries, transaction_id) = compress_log_files(&older, &newer)?;
+    save_compacted_entries(entries, older, newer, config, transaction_id)
 }
 
-fn save_compacted_entries(entries: HashMap<Uuid, Option<EntryFields>>, older: LogFile, newer: LogFile, config: &CollectionConfig) -> DBResult<()> {
+fn save_compacted_entries(entries: HashMap<Uuid, Option<EntryFields>>, older: LogFile, newer: LogFile, config: &CollectionConfig, transaction_id: Uuid) -> DBResult<()> {
     let max_entries = config.storage_config.log_file.max_entries;
     let chunks = entries.into_iter().chunks(max_entries);
 
@@ -24,18 +24,19 @@ fn save_compacted_entries(entries: HashMap<Uuid, Option<EntryFields>>, older: Lo
         }
         let file = if index == 0 { &older } else { &newer };
         LogFile::truncate_entries(file, config, chunk.filter_map(|(id, values)| {
-            values.map(|v| LogEntry::Entity(Uuid::nil(), EntityEntry::Updated(Row { id, fields: v })))
+            values.map(|fields| LogEntry::update(transaction_id, id, fields))
         }))?;
     }
 
     Ok(())
 }
 
-fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBResult<HashMap<Uuid, Option<EntryFields>>> {
+fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBResult<(HashMap<Uuid, Option<EntryFields>>, Uuid)> {
     let older_entries = older_entries.read()?;
     let newer_entries = newer_entries.read()?;
     let mut entries: HashMap<Uuid, Option<EntryFields>> = HashMap::with_capacity((older_entries.len() + newer_entries.len()) / 2);
     let mut transactions = HashSet::<Uuid>::new();
+    let mut newest_transaction_id = Uuid::nil();
     for entry in newer_entries.iter().chain(older_entries.iter()) {
         match entry {
             LogEntry::Entity(transaction_id, EntityEntry::Updated(row)) => {
@@ -49,12 +50,16 @@ fn compress_log_files(older_entries: &LogFile, newer_entries: &LogFile) -> DBRes
                 }
             },
             LogEntry::Transaction(transaction_id, TransactionEntry::Committed) => {
-                transactions.insert(*transaction_id);
+                let id = *transaction_id;
+                transactions.insert(id);
+                if newest_transaction_id < id {
+                    newest_transaction_id = id;
+                }
             },
             LogEntry::Transaction(_, TransactionEntry::Rollbacked) => { },
         }
         
     }
-    Ok(entries)
+    Ok((entries, newest_transaction_id))
 }
 

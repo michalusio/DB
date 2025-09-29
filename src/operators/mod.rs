@@ -1,4 +1,4 @@
-use std::hash::Hash;
+use std::{hash::Hash};
 use serde::Deserialize;
 use crate::{storage::log_file::log_entry::Row, DBResult, EntryFields};
 
@@ -7,7 +7,6 @@ mod sourcing; pub use sourcing::*;
 mod linear; pub use linear::*;
 mod joining; pub use joining::*;
 mod sorting; pub use sorting::*;
-mod aggregation; pub use aggregation::*;
 
 pub trait DBOperator: Sized + Clone {
     fn next(&mut self) -> DBResult<Option<Row>>;
@@ -31,6 +30,10 @@ pub trait DBOperator: Sized + Clone {
     /// A [`Some`] specifies the estimated cost of executing the rest of the operator, in not-specified units relative to the other operators.
     fn cost_hint(&self) -> Option<usize> {
         None
+    }
+
+    fn select<'a, Selector: Clone + for<'x> FnOnce(SelectBuilder<'x>) -> SelectBuilder<'x>>(self, selector: Selector) -> Select<'a, Self, Selector> {
+        Select::new(self, selector)
     }
 
     fn filter<Predicate: Clone + Fn(&EntryFields) -> bool>(self, predicate: Predicate) -> Filter<Self, Predicate> {

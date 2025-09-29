@@ -19,8 +19,7 @@ pub use operators::*;
 #[cfg(test)]
 mod tests {
     use crate::{DBOperator, ObjectField, Row};
-    use std::{borrow::Cow, fs, time::{Duration, Instant}};
-
+    use std::{borrow::Cow, fs, time::Instant};
     use fakeit::{address::country, name};
     use log::{info};
     use serde::Deserialize;
@@ -66,34 +65,6 @@ mod tests {
 
     #[test]
     #[serial(engine)]
-    fn save_speed_test() {
-        wipe_log_files();
-        let mut engine = Storage::new().unwrap();
-        let mut collection = engine
-            .create_new_collection("table")
-            .unwrap()
-            .write()
-            .unwrap();
-
-        let mut duration = Duration::default();
-        
-        for _ in 1..1000 {
-            let id = Uuid::new_v4();
-            let state: Vec<ObjectField> = vec![
-                "Michał".into(),
-                26.into(),
-                654.645.into()
-            ];
-            
-            let instant = Instant::now();
-            collection.set_object(Uuid::nil(), id, state.into()).unwrap();
-            duration += Instant::now() - instant;
-        }
-        info!("Duration of save speed test: {:#?}", duration);
-    }
-
-    #[test]
-    #[serial(engine)]
     fn save_multiple_speed_test() {
         wipe_log_files();
         let mut engine = Storage::new().unwrap();
@@ -119,39 +90,6 @@ mod tests {
 
     #[test]
     #[serial(engine)]
-    fn save_multiple_tables_speed_test() {
-        wipe_log_files();
-        let mut engine = Storage::new().unwrap();
-        let instant = Instant::now();
-        let id = Uuid::new_v4();
-
-        let state: Vec<ObjectField> = vec![
-            "Michał".into(),
-            26.into(),
-            654.645.into()
-        ];
-        {
-            let mut collection1 = engine
-                .create_new_collection("table")
-                .unwrap()
-                .write()
-                .unwrap();
-            
-            collection1.set_object(Uuid::nil(), id, state.clone().into()).unwrap();
-        }
-        {
-            let mut collection2 = engine
-                .create_new_collection("table2")
-                .unwrap()
-                .write()
-                .unwrap();
-            collection2.set_object(Uuid::nil(), id, state.into()).unwrap();
-        }
-        info!("Duration of save multiple tables speed test: {:#?}", Instant::now() - instant);
-    }
-
-    #[test]
-    #[serial(engine)]
     fn collection_iteration() {
         wipe_log_files();
         let mut engine = Storage::new().unwrap();
@@ -168,6 +106,7 @@ mod tests {
         }
     
         #[derive(Deserialize)]
+        #[allow(dead_code)]
         struct TestStruct<'a> {
             a: Cow<'a, str>,
             b: i32,

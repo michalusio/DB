@@ -4,7 +4,7 @@ use log_err::LogErrResult;
 use uuid::Uuid;
 use yoke::{Yoke, Yokeable};
 
-use crate::{objects::FieldType, ObjectField};
+use crate::{objects::FieldType, ObjectField, SelectField};
 
 #[derive(Yokeable)]
 #[repr(transparent)]
@@ -23,7 +23,66 @@ pub struct EntryFields(pub(crate) Range<usize>, pub(crate) Rc<[u8]>);
 
 impl From<Vec<ObjectField<'_>>> for EntryFields {
     fn from(fields: Vec<ObjectField<'_>>) -> Self {
-        let mut data = Vec::with_capacity(fields.len() * 8);
+        fields.as_slice().into()
+    }
+}
+
+impl From<Vec<SelectField<'_>>> for EntryFields {
+    fn from(fields: Vec<SelectField<'_>>) -> Self {
+        let mut data = Vec::with_capacity(1 + fields.iter().map(|f| 1 + match &**f {
+            ObjectField::Bool(_) => 1,
+            ObjectField::I32(_) => 4,
+            ObjectField::I64(_) => 8,
+            ObjectField::Decimal(_) => 8,
+            ObjectField::Id(_) => 16,
+            ObjectField::Bytes(b) => 1 + b.len(),
+            ObjectField::String(b) => 1 + b.len()
+        }).sum::<usize>());
+        data.push(fields.len() as u8);
+        
+        data.extend(fields.iter().map(|f| match &**f {
+            ObjectField::Bool(_) => FieldType::Bool,
+            ObjectField::I32(_) => FieldType::I32,
+            ObjectField::I64(_) => FieldType::I64,
+            ObjectField::Decimal(_) => FieldType::Decimal,
+            ObjectField::Id(_) => FieldType::Id,
+            ObjectField::Bytes(_) => FieldType::Bytes,
+            ObjectField::String(_) => FieldType::String,
+        } as u8));
+        
+        for field in fields {
+            match &*field {
+                ObjectField::Bool(b) => data.push(if *b { 1 } else { 0 }),
+                ObjectField::I32(i) => data.extend(i.to_le_bytes()),
+                ObjectField::I64(i) => data.extend(i.to_le_bytes()),
+                ObjectField::Decimal(f) => data.extend(f.to_le_bytes()),
+                ObjectField::Id(id) => data.extend(id.as_bytes()),
+                ObjectField::Bytes(bytes) => {
+                    data.push(bytes.len() as u8);
+                    data.extend(bytes.iter());
+                },
+                ObjectField::String(str) => {
+                    data.push(str.len() as u8);
+                    data.extend(str.as_bytes())
+                },
+            };
+        }
+        let len = data.len();
+        EntryFields(Range { start: 0, end: len }, data.into_boxed_slice().into())
+    }
+}
+
+impl From<&[ObjectField<'_>]> for EntryFields {
+    fn from(fields: &[ObjectField<'_>]) -> Self {
+        let mut data = Vec::with_capacity(1 + fields.iter().map(|f| 1 + match f {
+            ObjectField::Bool(_) => 1,
+            ObjectField::I32(_) => 4,
+            ObjectField::I64(_) => 8,
+            ObjectField::Decimal(_) => 8,
+            ObjectField::Id(_) => 16,
+            ObjectField::Bytes(b) => 1 + b.len(),
+            ObjectField::String(b) => 1 + b.len()
+        }).sum::<usize>());
         data.push(fields.len() as u8);
         
         data.extend(fields.iter().map(|f| match f {
@@ -38,7 +97,7 @@ impl From<Vec<ObjectField<'_>>> for EntryFields {
         
         for field in fields {
             match field {
-                ObjectField::Bool(b) => data.push(if b { 1 } else { 0 }),
+                ObjectField::Bool(b) => data.push(if *b { 1 } else { 0 }),
                 ObjectField::I32(i) => data.extend(i.to_le_bytes()),
                 ObjectField::I64(i) => data.extend(i.to_le_bytes()),
                 ObjectField::Decimal(f) => data.extend(f.to_le_bytes()),
@@ -67,12 +126,12 @@ impl EntryFields {
         self.1[self.0.start] == 0
     }
 
-    pub fn field_types(&self) -> &[FieldType] {
+    pub fn column_types(&self) -> &[FieldType] {
         unsafe { std::mem::transmute::<&[u8], &[FieldType]>(&self.1[self.0.start + 1..][..self.len()]) }
     }
 
-    pub fn get_field(&'_ self, index: usize) -> ObjectField<'_> {
-        let (field_type, bytes) = self.get_field_data(index);
+    pub fn column(&'_ self, index: usize) -> ObjectField<'_> {
+        let (field_type, bytes) = self.get_column_data(index);
         match field_type {
             FieldType::Bool => ObjectField::Bool(bytes[0] > 0),
             FieldType::I32 => ObjectField::I32(i32::from_le_bytes(bytes.try_into().log_unwrap())),
@@ -84,7 +143,7 @@ impl EntryFields {
         }
     }
 
-    pub(crate) fn field_data(&self) -> &[u8] {
+    pub(crate) fn column_bytes(&self) -> &[u8] {
         &self.1[self.0.start + self.len() + 1..self.0.end]
     }
 
@@ -92,8 +151,8 @@ impl EntryFields {
         let that = Box::new(self);
         Yoke::attach_to_cart(that, |data| {
             let count = data.len();
-            let types = data.field_types();
-            let data = data.field_data();
+            let types = data.column_types();
+            let data = data.column_bytes();
 
             let mut result = Vec::with_capacity(count);
             let mut current_index: usize = 0;
@@ -132,10 +191,10 @@ impl EntryFields {
         })
     }
 
-    pub(crate) fn get_field_data(&'_ self, index: usize) -> (FieldType, &'_ [u8]) {
+    pub(crate) fn get_column_data(&'_ self, index: usize) -> (FieldType, &'_ [u8]) {
         assert!(index < self.len(), "Accessed field outside of the entry");
-        let types = self.field_types();
-        let data = self.field_data();
+        let types = self.column_types();
+        let data = self.column_bytes();
 
         let mut current_index = 0;
         let mut current_pointer = 0;
@@ -171,12 +230,12 @@ impl EntryFields {
         let a_field_count = a.len();
         let b_field_count = b.len();
 
-        let a_data = a.field_data();
-        let b_data = b.field_data();
+        let a_data = a.column_bytes();
+        let b_data = b.column_bytes();
 
         fields_data[0] = (a_field_count + b_field_count) as u8;
-        fields_data[1..][..a_field_count].copy_from_slice(unsafe { std::mem::transmute::<&[FieldType], &[u8]>(a.field_types()) });
-        fields_data[1+a_field_count..][..b_field_count].copy_from_slice(unsafe { std::mem::transmute::<&[FieldType], &[u8]>(b.field_types()) });
+        fields_data[1..][..a_field_count].copy_from_slice(unsafe { std::mem::transmute::<&[FieldType], &[u8]>(a.column_types()) });
+        fields_data[1+a_field_count..][..b_field_count].copy_from_slice(unsafe { std::mem::transmute::<&[FieldType], &[u8]>(b.column_types()) });
         
         fields_data[1+a_field_count+b_field_count..][..a_data.len()].copy_from_slice(a_data);
         fields_data[1+a_field_count+b_field_count+a_data.len()..][..b_data.len()].copy_from_slice(b_data);
@@ -184,15 +243,15 @@ impl EntryFields {
         EntryFields(0..fields_data.len(), fields_data.into())
     }
 
-    pub(crate) fn byte_size(&self) -> u64 {
-        (self.0.len() + std::mem::size_of::<Self>()) as u64
+    pub(crate) fn byte_size(&self) -> usize {
+        self.0.len() + std::mem::size_of::<Self>()
     }
 }
 
 impl Display for EntryFields {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Row<")?;
-        for (index, field) in (0..self.len()).map(|i|self.get_field(i)).enumerate() {
+        for (index, field) in (0..self.len()).map(|i|self.column(i)).enumerate() {
             if index > 0 {
                 write!(f, ", ")?;
             }

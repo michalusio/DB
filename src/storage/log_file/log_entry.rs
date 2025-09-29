@@ -44,13 +44,6 @@ impl LogEntry {
         LogEntry::Transaction(transaction_id, TransactionEntry::Rollbacked)
     }
 
-    pub fn transaction_id(&self) -> Uuid {
-        match self {
-            LogEntry::Entity(id, _) => *id,
-            LogEntry::Transaction(id, _) => *id
-        }
-    }
-
     pub fn compress_to(&self, store: &mut Vec<u8>) {
         match self {
             LogEntry::Entity(transaction_id, entity) => {
@@ -89,26 +82,26 @@ impl LogEntry {
         match kind {
             0 => {
                 let id = Uuid::from_bytes(data[17..][0..16].try_into().log_unwrap());
-                Ok(LogEntry::Entity(transaction_id, EntityEntry::Deleted(id)))
-            },
-            2 => {
-                Ok(LogEntry::Transaction(transaction_id, TransactionEntry::Committed))
-            },
-            3 => {
-                Ok(LogEntry::Transaction(transaction_id, TransactionEntry::Rollbacked))
+                Ok(LogEntry::delete(transaction_id, id))
             },
             1 => {
                 let id = Uuid::from_bytes(data[17..][0..16].try_into().log_unwrap());
-
-                Ok(LogEntry::Entity(transaction_id, EntityEntry::Updated(Row { id, fields: EntryFields(Range { start: range.start + 33, end: range.end }, rc) })))
+                let fields = EntryFields(Range { start: range.start + 33, end: range.end }, rc);
+                Ok(LogEntry::update(transaction_id, id, fields))
+            },
+            2 => {
+                Ok(LogEntry::commit(transaction_id))
+            },
+            3 => {
+                Ok(LogEntry::rollback(transaction_id))
             },
             _ => unimplemented!()
         }
         
     }
 
-    pub fn byte_size(&self) -> u64 {
-        (std::mem::size_of::<Self>() as u64) + match self {
+    pub fn byte_size(&self) -> usize {
+        std::mem::size_of::<Self>() + match self {
             LogEntry::Entity(_, entry) => entry.byte_size(),
             LogEntry::Transaction(_, _) => 0
         }
@@ -126,9 +119,9 @@ impl EntityEntry {
 
     /// Checks if the object has the same shape as the other one.
     /// <ul>
-    /// <li>If the checked object is a tombstone, it automatically has a correct shape to every object.</li>
-    /// <li>If the other shape is a tombstone, the function requests checking on another object.</li>
-    /// <li>If both objects have values, all the values between them have to have the same kind.</li>
+    /// <li>If the checked object is a tombstone, it automatically has a correct shape to every object, i.e. <code>Break(true)</code></li>
+    /// <li>If the other shape is a tombstone, the function requests checking on another object, i.e. <code>Continue(())</code></li>
+    /// <li>If both objects have values, all the values between them have to have the same kind, i.e. <code>Break(bool)</code></li>
     /// </ul>
     pub fn is_same_shape(&self, other: &Self) -> ControlFlow<bool> {
         match (self, other) {
@@ -140,14 +133,14 @@ impl EntityEntry {
             ) => {
                 let self_values = &self_row.fields;
                 let other_values = &other_row.fields;
-                let self_types = self_values.field_types();
-                let other_types = other_values.field_types();
+                let self_types = self_values.column_types();
+                let other_types = other_values.column_types();
                 ControlFlow::Break(self_types.eq(other_types))
             },
         }
     }
 
-    pub fn byte_size(&self) -> u64 {
+    pub fn byte_size(&self) -> usize {
         match self {
             EntityEntry::Updated(row) => row.fields.byte_size(),
             EntityEntry::Deleted(_) => 0
@@ -206,10 +199,10 @@ mod tests {
                 assert_eq!(row.fields.len(), 4);
                 
                 let checks = vec![
-                    row.fields.get_field(0),
-                    row.fields.get_field(1),
-                    row.fields.get_field(2),
-                    row.fields.get_field(3)
+                    row.fields.column(0),
+                    row.fields.column(1),
+                    row.fields.column(2),
+                    row.fields.column(3)
                 ];
                 let wanted: Vec<ObjectField> = vec![
                     (12i64).into(),

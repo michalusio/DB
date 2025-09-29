@@ -49,7 +49,7 @@ impl<Iter: DBOperator, Iter2: DBOperator> DBOperator for NestedLoop<Iter, Iter2>
 
             let second_item = second_iter.next()?;
             if let Some(item) = second_item {
-                if first_value.fields.get_field(self.first_column) == item.fields.get_field(self.second_column) {
+                if first_value.fields.column(self.first_column) == item.fields.column(self.second_column) {
                     let return_value = Row::combine(first_value, &item);
                     return Ok(Some(return_value));
                 };

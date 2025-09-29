@@ -1,13 +1,10 @@
-use std::{ops::ControlFlow::Break, sync::{Arc, Mutex}};
+use std::{ops::ControlFlow::Break, path::PathBuf, sync::{Arc, Mutex}};
 
-use bytesize::ByteSize;
 use itertools::Itertools;
-use log::{info};
 use schnellru::{ByLength, LruMap};
-use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::{errors::storage_error::{SchemaError, StorageError}, operators::TableScan, query::Query, storage::log_file::{log_entry::{EntityEntry, LogEntry}, LogFile}, utils::{DBResult, GuardExtensions}, DBOperator, EntryFields, Row};
+use crate::{errors::storage_error::{SchemaError, StorageError}, operators::TableScan, storage::log_file::{log_entry::{EntityEntry, LogEntry}, LogFile}, utils::{DBResult, GuardExtensions}, DBOperator, Row};
 
 use self::{collection_config::CollectionConfig, indexes::WrappedIndex, collection_statistics::CollectionStatistics};
 
@@ -45,11 +42,6 @@ impl Collection {
         &self.config.collection_name
     }
 
-    /// Sets the state of the object with the given id to the given state
-    pub fn set_object(&mut self, transaction_id: Uuid, object_id: Uuid, fields: EntryFields) -> DBResult<usize> {
-        self.set_objects(transaction_id, [Row { id: object_id, fields }])
-    }
-
     /// Sets the state of the objects with the given ids to the given states
     pub fn set_objects(&mut self, transaction_id: Uuid, objects: impl IntoIterator<Item = Row>) -> DBResult<usize> {
         let entries = objects
@@ -60,10 +52,7 @@ impl Collection {
         if let Some(value_entry) = self.get_any_entry_data()? {
             let error_entry = entries
                 .iter()
-                .find(|e| matches!(
-                    e.is_same_shape(&value_entry),
-                    Break(false)
-                ));
+                .find(|e| e.is_same_shape(&value_entry) == Break(false));
             if let Some(e) = error_entry {
                 return Err(SchemaError::from_string(e.object_id().to_string()).into());
             }
@@ -103,7 +92,8 @@ impl Collection {
         Ok(appends)
     }
 
-    pub fn get_file(&self, index: usize) -> DBResult<Option<Arc<LogFile>>> {
+    /// Retrieves the specified log file from the collection
+    pub(crate) fn get_file(&self, index: usize) -> DBResult<Option<Arc<LogFile>>> {
         match self.log_files
             .lock()
             .not_poisoned()
@@ -126,30 +116,28 @@ impl Collection {
         TableScan::new(self, transaction_id)
     }
 
-    pub fn query<'a, Item: Deserialize<'a> + 'a>(&'a self, transaction_id: Uuid) -> Query<'a, Item> {
-        Query::<Item>::from_collection(self, transaction_id)
-    }
-
-    pub fn print_debug_info(&self) {
-        let usage = self.get_file_cache_usage();
-        info!("File cache usage: {}/{}", usage.0, usage.1);
-        info!("File cache memory usage: {}", ByteSize::b(self.get_file_cache_memory_usage()).display());
-        info!("Log file directory: {:#?}", self.config.get_collection_files_destination());
-        info!("Last file index: {:#?}", self.last_file_index);
+    pub fn print_debug_info(&self) -> CollectionDebugInfo {
+        let lock = self.log_files.lock().not_poisoned();
+        CollectionDebugInfo {
+            file_cache_slots_used: lock.len(),
+            file_cache_slots_max: lock.limiter().max_length() as usize,
+            file_cache_memory_used: lock.iter().map(|e| e.1.byte_size()).sum(),
+            log_file_directory: self.config.get_collection_files_destination(),
+            log_file_last_index: self.last_file_index
+        }
     }
 
     pub fn clear_cache(&self) {
         let mut lock = self.log_files.lock().not_poisoned();
         lock.clear();
     }
+}
 
-    pub fn get_file_cache_usage(&self) -> (usize, u32) {
-        let lock = self.log_files.lock().not_poisoned();
-        (lock.len(), lock.limiter().max_length())
-    }
-
-    pub fn get_file_cache_memory_usage(&self) -> u64 {
-        self.log_files.lock().not_poisoned().iter().map(|e| e.1.byte_size()).sum()
-    }
-
+#[derive(Clone)]
+pub struct CollectionDebugInfo {
+    pub file_cache_slots_used: usize,
+    pub file_cache_slots_max: usize,
+    pub file_cache_memory_used: usize,
+    pub log_file_directory: PathBuf,
+    pub log_file_last_index: usize
 }
