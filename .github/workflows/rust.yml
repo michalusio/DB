@@ -11,7 +11,8 @@ env:
 
 jobs:
   build:
-    permissions: write-all
+    permissions:
+      checks: write
     runs-on: ubuntu-latest
 
     steps:
@@ -51,34 +52,14 @@ jobs:
 
   benchmarks:
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Load cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Run benchmark
-      run: cargo +nightly bench | tee benchmark.txt
-
-    - name: Download previous benchmark data
-      uses: actions/cache@v4
-      with:
-        path: ./cache
-        key: ${{ runner.os }}-benchmark
-
-    - name: Store benchmark result
-      uses: benchmark-action/github-action-benchmark@v1
-      with:
-        tool: 'cargo'
-        output-file-path: benchmark.txt
-        external-data-json-path: ./cache/benchmark-data.json
-        fail-on-alert: true
-        summary-always: true
+    - uses: bencherdev/bencher@main
+    - name: Track base branch benchmarks with Bencher
+      run: |
+        bencher run --github-actions '${{ secrets.GITHUB_TOKEN }}' --adapter rust_bench "cargo +nightly bench"
