@@ -4,8 +4,8 @@ use uuid::Uuid;
 use fakeit::name;
 
 pub fn wipe_log_files() {
-    fs::remove_dir_all("./logfile").unwrap();
-    fs::create_dir("./logfile").unwrap();
+    let _ = fs::remove_dir_all("./logfile");
+    let _ = fs::create_dir("./logfile");
 }
 
 pub fn init_benchmark() {

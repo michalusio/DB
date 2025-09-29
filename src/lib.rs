@@ -39,8 +39,8 @@ mod tests {
     }
 
     fn wipe_log_files() {
-        fs::remove_dir_all("./logfile").unwrap();
-        fs::create_dir("./logfile").unwrap();
+        let _ = fs::remove_dir_all("./logfile");
+        let _ = fs::create_dir("./logfile");
     }
 
     fn generate_sample_data() -> (Vec<Row>, Vec<Uuid>) {
