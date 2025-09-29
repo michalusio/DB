@@ -30,7 +30,7 @@ jobs:
       run: cargo build
 
     - name: Run tests
-      run: cargo test -- -Z unstable-options --format json --report-time | tee test-results.json
+      run: cargo test -- --format json --report-time | tee test-results.json
 
     - name: Prepare test report
       id: cargo_reporter
