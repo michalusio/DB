@@ -49,16 +49,3 @@ jobs:
         fail_on_failure: true
         require_tests: true
         summary: ${{ steps.cargo_reporter.outputs.summary }}
-
-  benchmarks:
-    runs-on: ubuntu-latest
-    permissions: write-all
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - uses: bencherdev/bencher@main
-    - name: Track base branch benchmarks with Bencher
-      run: |
-        bencher run --github-actions '${{ secrets.GITHUB_TOKEN }}' --ci-on-the-fly --adapter rust_bench "cargo +nightly bench"
