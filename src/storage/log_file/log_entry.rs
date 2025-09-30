@@ -86,7 +86,7 @@ impl LogEntry {
             },
             1 => {
                 let id = Uuid::from_bytes(data[17..][0..16].try_into().log_unwrap());
-                let fields = EntryFields(Range { start: range.start + 33, end: range.end }, rc);
+                let fields = EntryFields((range.start + 33)..range.end, rc);
                 Ok(LogEntry::update(transaction_id, id, fields))
             },
             2 => {
@@ -160,7 +160,7 @@ impl Row {
 
 #[cfg(test)]
 mod tests {
-    use std::{ops::Range, rc::Rc};
+    use std::{rc::Rc};
 
     use serial_test::parallel;
     use uuid::Uuid;
@@ -189,7 +189,7 @@ mod tests {
         let data: Rc<[u8]> = data.into_boxed_slice().into();
 
         // testing deserialization
-        let entry = LogEntry::decompress(data.clone(), Range { start: 0, end: data.len()}).unwrap();
+        let entry = LogEntry::decompress(data.clone(), 0..data.len()).unwrap();
 
         assert_eq!(entry.byte_size(), 136);
         match entry {

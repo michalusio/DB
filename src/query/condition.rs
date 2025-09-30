@@ -17,7 +17,7 @@ pub enum Condition {
     Binary(BinaryExpression),
 
     Column(&'static str),
-    Value(ObjectField<'static>)
+    Value(ObjectField)
 }
 
 impl Normalizable for Condition {

@@ -47,7 +47,7 @@ mod tests {
         let data: Vec<_> = (1..10000)
         .map(|_| {
             let id = Uuid::new_v4();
-            let state: Vec<ObjectField<'_>> = vec![
+            let state: Vec<ObjectField> = vec![
                 "Michał".into(),
                 26.into(),
                 654.645.into()

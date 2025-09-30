@@ -6,7 +6,7 @@ use crate::{errors::query_error::DeserializerError, storage::log_file::entry_fie
 use super::ObjectField;
 
 pub struct ObjectDeserializer {
-    data: Yoke<DeserializedFields<'static>, Box<EntryFields>>,
+    data: Yoke<DeserializedFields, Box<EntryFields>>,
     index: usize
 }
 
@@ -18,7 +18,7 @@ impl ObjectDeserializer {
         }
     }
 
-    fn next_item(&'_ mut self) -> Option<&'_ ObjectField<'_>> {
+    fn next_item(&'_ mut self) -> Option<&'_ ObjectField> {
         let item = self.data.get().get(self.index);
         self.index += 1;
         item
@@ -136,7 +136,7 @@ impl<'de> Deserializer<'de> for &mut ObjectDeserializer {
                 ObjectField::Decimal(d) => Err(DeserializerError::invalid_type(Unexpected::Float(*d), &visitor)),
                 ObjectField::Id(_) => Err(DeserializerError::invalid_type(Unexpected::Other("uuid"), &visitor)),
                 ObjectField::Bytes(bytes) => Err(DeserializerError::invalid_type(Unexpected::Bytes(bytes), &visitor)),
-                ObjectField::String(str) => visitor.visit_string(str.clone().into_owned()),
+                ObjectField::String(str) => visitor.visit_string(str.to_string()),
             },
             None => Err(DeserializerError::missing_field("Error - no more columns in row"))
         }

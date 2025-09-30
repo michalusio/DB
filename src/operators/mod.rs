@@ -1,12 +1,12 @@
-use std::{hash::Hash};
 use serde::Deserialize;
-use crate::{storage::log_file::log_entry::Row, DBResult, EntryFields};
+use crate::{storage::log_file::log_entry::Row, DBResult, EntryFields, ObjectField};
 
 mod deserializing; pub use deserializing::*;
 mod sourcing; pub use sourcing::*;
 mod linear; pub use linear::*;
 mod joining; pub use joining::*;
 mod sorting; pub use sorting::*;
+mod spools; pub use spools::*;
 
 pub trait DBOperator: Sized + Clone {
     fn next(&mut self) -> DBResult<Option<Row>>;
@@ -32,7 +32,7 @@ pub trait DBOperator: Sized + Clone {
         None
     }
 
-    fn select<'a, Selector: Clone + for<'x> FnOnce(SelectBuilder<'x>) -> SelectBuilder<'x>>(self, selector: Selector) -> Select<'a, Self, Selector> {
+    fn select<Selector: Clone + for<'x> FnOnce(SelectBuilder<'x>, &EntryFields) -> SelectBuilder<'x>>(self, selector: Selector) -> Select<Self, Selector> {
         Select::new(self, selector)
     }
 
@@ -70,7 +70,7 @@ pub trait DBOperator: Sized + Clone {
         NestedLoop::new(self, iter2, a_column_index, b_column_index)
     }
 
-    fn hash_match<HashedIter: DBOperator, Key: Hash + Clone + Eq, IterGetter: Clone + Fn(&EntryFields) -> Key, HashedGetter: Clone + Fn(&EntryFields) -> Key>(self, hashed_iterator: HashedIter, iter_getter: IterGetter, hashed_getter: HashedGetter) -> HashMatch<Self, HashedIter, Key, IterGetter, HashedGetter> {
+    fn hash_match<HashedIter: DBOperator, Key: Into<ObjectField> + Clone, IterGetter: Clone + Fn(&EntryFields) -> Key, HashedGetter: Clone + Fn(&EntryFields) -> Key>(self, hashed_iterator: HashedIter, iter_getter: IterGetter, hashed_getter: HashedGetter) -> HashMatch<Self, HashedIter, Key, IterGetter, HashedGetter> {
         HashMatch::new(self, hashed_iterator, iter_getter, hashed_getter)
     }
 

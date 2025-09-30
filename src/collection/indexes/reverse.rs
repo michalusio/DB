@@ -8,7 +8,7 @@ use super::Index;
 pub struct ReverseIndex {
     pub column: usize,
     pub descending: bool,
-    pub data: Vec<(ObjectField<'static>, Vec<Uuid>)>
+    pub data: Vec<(ObjectField, Vec<Uuid>)>
 }
 
 impl Index for ReverseIndex {

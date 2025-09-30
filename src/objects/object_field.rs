@@ -1,17 +1,17 @@
-use std::{borrow::Cow, cmp::Ordering, fmt::Display};
+use std::{borrow::Cow, cmp::Ordering, fmt::Display, hash::Hash, rc::Rc};
 use uuid::Uuid;
 
 type Decimal = f64;
 
 #[derive(Clone, Debug)]
-pub enum ObjectField<'a> {
+pub enum ObjectField {
     Bool(bool),
     I32(i32),
     I64(i64),
     Decimal(Decimal),
     Id(Uuid),
-    Bytes(Cow<'a, [u8]>),
-    String(Cow<'a, str>),
+    Bytes(Rc<[u8]>),
+    String(Rc<str>),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -26,7 +26,7 @@ pub enum FieldType {
     String = 6,
 }
 
-impl ObjectField<'_> {
+impl ObjectField {
     pub fn as_bool(&self) -> Option<bool> {
         if let ObjectField::Bool(b) = self {
             Some(*b)
@@ -67,31 +67,19 @@ impl ObjectField<'_> {
         }
     }
 
-    pub fn as_bytes(&self) -> Option<Cow<'_, [u8]>> {
+    pub fn as_bytes(&self) -> Option<Rc<[u8]>> {
         if let ObjectField::Bytes(bytes) = self {
-            Some(Cow::Borrowed(bytes))
+            Some(bytes.clone())
         } else {
             None
         }
     }
 
-    pub fn as_string(&self) -> Option<Cow<'_, str>> {
+    pub fn as_string(&self) -> Option<Rc<str>> {
         if let ObjectField::String(string) = self {
-            Some(Cow::Borrowed(string))
+            Some(string.clone())
         } else {
             None
-        }
-    }
-
-    pub(crate) fn change_lifetime<'a>(self) -> ObjectField<'a> {
-        match self {
-            ObjectField::Bool(b) => ObjectField::Bool(b),
-            ObjectField::I32(i) => ObjectField::I32(i),
-            ObjectField::I64(i) => ObjectField::I64(i),
-            ObjectField::Decimal(d) => ObjectField::Decimal(d),
-            ObjectField::Id(uuid) => ObjectField::Id(uuid),
-            ObjectField::Bytes(cow) => ObjectField::Bytes(cow.into_owned().into()),
-            ObjectField::String(cow) => ObjectField::String(cow.into_owned().into()),
         }
     }
 }
@@ -102,7 +90,7 @@ fn check_decimal_equal(a: &f64, b: &f64) -> bool {
     (a.is_nan() && b.is_nan()) || (a - b).abs() < DB_EPSILON
 }
 
-impl PartialEq for ObjectField<'_> {
+impl PartialEq for ObjectField {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
@@ -117,15 +105,15 @@ impl PartialEq for ObjectField<'_> {
     }
 }
 
-impl Eq for ObjectField<'_> {}
+impl Eq for ObjectField {}
 
-impl PartialOrd for ObjectField<'_> {
+impl PartialOrd for ObjectField {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for ObjectField<'_> {
+impl Ord for ObjectField {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Bool(b1), Self::Bool(b2)) => b1.cmp(b2),
@@ -153,7 +141,7 @@ impl Ord for ObjectField<'_> {
     }
 }
 
-impl Display for ObjectField<'_> {
+impl Display for ObjectField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ObjectField::Bool(b) => f.write_fmt(format_args!("Bool: \"{}\"", b)),
@@ -167,62 +155,77 @@ impl Display for ObjectField<'_> {
     }
 }
 
-impl From<String> for ObjectField<'_> {
+impl Hash for ObjectField {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            ObjectField::Bool(b) => b.hash(state),
+            ObjectField::I32(i) => i.hash(state),
+            ObjectField::I64(i) => i.hash(state),
+            ObjectField::Decimal(d) => f64::to_bits(*d).hash(state),
+            ObjectField::Id(uuid) => uuid.hash(state),
+            ObjectField::Bytes(cow) => cow.hash(state),
+            ObjectField::String(cow) => cow.hash(state),
+        };
+    }
+}
+
+impl From<String> for ObjectField {
     fn from(value: String) -> Self {
-        ObjectField::String(Cow::Owned(value))
+        ObjectField::String(value.as_str().into())
     }
 }
 
-impl<'a> From<&'a str> for ObjectField<'a> {
+impl<'a> From<&'a str> for ObjectField {
     fn from(value: &'a str) -> Self {
-        ObjectField::String(Cow::Borrowed(value))
+        ObjectField::String(value.into())
     }
 }
 
-impl From<i32> for ObjectField<'_> {
+impl From<i32> for ObjectField {
     fn from(value: i32) -> Self {
         ObjectField::I32(value)
     }
 }
 
-impl From<i64> for ObjectField<'_> {
+impl From<i64> for ObjectField {
     fn from(value: i64) -> Self {
         ObjectField::I64(value)
     }
 }
 
-impl From<f64> for ObjectField<'_> {
+impl From<f64> for ObjectField {
     fn from(value: f64) -> Self {
         ObjectField::Decimal(value)
     }
 }
 
-impl From<bool> for ObjectField<'_> {
+impl From<bool> for ObjectField {
     fn from(value: bool) -> Self {
         ObjectField::Bool(value)
     }
 }
 
-impl From<Uuid> for ObjectField<'_> {
+impl From<Uuid> for ObjectField {
     fn from(value: Uuid) -> Self {
         ObjectField::Id(value)
     }
 }
 
-impl<'a> From<&'a [u8]> for ObjectField<'a> {
+impl<'a> From<&'a [u8]> for ObjectField {
     fn from(value: &'a [u8]) -> Self {
-        ObjectField::Bytes(Cow::Borrowed(value))
+        ObjectField::Bytes(value.into())
     }
 }
 
-impl<'a> From<Cow<'a, [u8]>> for ObjectField<'a> {
+impl<'a> From<Cow<'a, [u8]>> for ObjectField {
     fn from(value: Cow<'a, [u8]>) -> Self {
-        ObjectField::Bytes(value)
+        ObjectField::Bytes(value.into())
     }
 }
 
-impl<'a> From<Cow<'a, str>> for ObjectField<'a> {
+impl<'a> From<Cow<'a, str>> for ObjectField {
     fn from(value: Cow<'a, str>) -> Self {
-        ObjectField::String(value)
+        ObjectField::String(value.into())
     }
 }

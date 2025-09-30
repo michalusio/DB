@@ -6,16 +6,16 @@ use uuid::Uuid;
 use crate::{objects::DB_EPSILON, DBOperator, DBResult, EntryFields, ObjectField, Row};
 
 #[derive(Clone)]
-pub struct Select<'a, Iter: DBOperator, Selector>
-where for<'x> Selector: Clone + FnOnce(SelectBuilder<'x>) -> SelectBuilder<'x>
+pub struct Select<Iter: DBOperator, Selector>
+where Selector: Clone + for<'x> FnOnce(SelectBuilder<'x>, &EntryFields) -> SelectBuilder<'x>
 {
     iterator: Iter,
-    aggregator: SelectAggregator<'a>,
+    aggregator: SelectAggregator,
     selector: Selector
 }
 
-impl <'a, Iter: DBOperator, Selector> Select<'a, Iter, Selector>
-where for<'x> Selector: Clone + FnOnce(SelectBuilder<'x>) -> SelectBuilder<'x>
+impl <Iter: DBOperator, Selector> Select<Iter, Selector>
+where Selector: Clone + for<'x> FnOnce(SelectBuilder<'x>, &EntryFields) -> SelectBuilder<'x>
 {
     pub fn new(iterator: Iter, selector: Selector) -> Self {
         Select {
@@ -26,16 +26,16 @@ where for<'x> Selector: Clone + FnOnce(SelectBuilder<'x>) -> SelectBuilder<'x>
     }
 }
 
-impl<'a, Iter: DBOperator, Selector> DBOperator for Select<'a, Iter, Selector>
-where for<'x> Selector: Clone + FnOnce(SelectBuilder<'x>) -> SelectBuilder<'x>
+impl<Iter: DBOperator, Selector> DBOperator for Select<Iter, Selector>
+where Selector: Clone + for<'x> FnOnce(SelectBuilder<'x>, &EntryFields) -> SelectBuilder<'x>
 {
     fn next(&mut self) -> DBResult<Option<Row>> {
         loop {
             let next_item = self.iterator.next();
             match next_item? {
                 Some(data) => {
-                    let builder = SelectBuilder::new(data.fields);
-                    let builder = (self.selector.clone())(builder);
+                    let builder = SelectBuilder::new(&data.fields);
+                    let builder = (self.selector.clone())(builder, &data.fields);
                     match builder.get_row() {
                         Either::Left(row) => {
                             return Ok(Some(row));
@@ -71,18 +71,18 @@ where for<'x> Selector: Clone + FnOnce(SelectBuilder<'x>) -> SelectBuilder<'x>
 }
 
 #[derive(Clone)]
-pub struct SelectAggregator<'a> {
-    fields: Vec<SelectField<'a>>
+pub struct SelectAggregator {
+    fields: Vec<SelectField>
 }
 
-impl<'a> SelectAggregator<'a> {
+impl SelectAggregator {
     fn new() -> Self {
         SelectAggregator {
             fields: vec![]
         }
     }
 
-    fn aggregate(&mut self, builder: SelectBuilder<'a>) -> Option<Row> {
+    fn aggregate(&mut self, builder: SelectBuilder) -> Option<Row> {
         if self.fields.is_empty() {
             // Aggregator is empty - the received row becomes the aggregator
             self.fields = builder.fields;
@@ -123,21 +123,21 @@ impl<'a> SelectAggregator<'a> {
 }
 
 pub struct SelectBuilder<'a> {
-    pub row: EntryFields,
-    fields: Vec<SelectField<'a>>
+    row: &'a EntryFields,
+    fields: Vec<SelectField>
 }
 
 #[derive(Clone)]
-pub enum SelectField<'a> {
-    Field(ObjectField<'a>),
-    Sum(ObjectField<'a>),
-    Count(ObjectField<'a>),
-    Max(ObjectField<'a>),
-    Min(ObjectField<'a>),
+pub enum SelectField {
+    Field(ObjectField),
+    Sum(ObjectField),
+    Count(ObjectField),
+    Max(ObjectField),
+    Min(ObjectField),
 }
 
-impl<'a> Deref for SelectField<'a> {
-    type Target = ObjectField<'a>;
+impl Deref for SelectField {
+    type Target = ObjectField;
     
     fn deref(&self) -> &Self::Target {
         match self {
@@ -150,7 +150,7 @@ impl<'a> Deref for SelectField<'a> {
     }
 }
 
-impl<'a> SelectField<'a> {
+impl SelectField {
 
     fn groups(a: &SelectField, b: &SelectField) -> bool {
         match (a, b) {
@@ -163,16 +163,16 @@ impl<'a> SelectField<'a> {
         }
     }
 
-    fn combine(&mut self, next: SelectField<'a>) {
+    fn combine(&mut self, next: SelectField) {
         if let SelectField::Field(_) = self {
             return;
         }
         let field = match (&self, next) {
             (SelectField::Sum(self_field), SelectField::Sum(next_field)) => {
                 SelectField::Sum(match (self_field, next_field) {
-                    (ObjectField::I32(a), ObjectField::I32(b)) => ObjectField::I32(*a + b),
-                    (ObjectField::I64(a), ObjectField::I64(b)) => ObjectField::I64(*a + b),
-                    (ObjectField::Decimal(a), ObjectField::Decimal(b)) => ObjectField::Decimal(*a + b),
+                    (ObjectField::I32(a), ObjectField::I32(b)) => ObjectField::I32(a + b),
+                    (ObjectField::I64(a), ObjectField::I64(b)) => ObjectField::I64(a + b),
+                    (ObjectField::Decimal(a), ObjectField::Decimal(b)) => ObjectField::Decimal(a + b),
                     (_, _) => unimplemented!(),
                 })
             },
@@ -180,17 +180,17 @@ impl<'a> SelectField<'a> {
                 SelectField::Count(ObjectField::I64(*self_i64 + b as i64))
             },
             (SelectField::Max(self_field), SelectField::Max(next_field)) => {
-                let field: &ObjectField<'_> = self_field;
+                let field: &ObjectField = self_field;
                 if field < &next_field {
-                    SelectField::Max(next_field.clone())
+                    SelectField::Max(next_field)
                 } else {
                     SelectField::Max(self_field.clone())
                 }
             },
             (SelectField::Min(self_field), SelectField::Min(next_field)) => {
-                let field: &ObjectField<'_> = self_field;
+                let field: &ObjectField = self_field;
                 if field > &next_field {
-                    SelectField::Max(next_field.clone())
+                    SelectField::Max(next_field)
                 } else {
                     SelectField::Max(self_field.clone())
                 }
@@ -202,7 +202,7 @@ impl<'a> SelectField<'a> {
 }
 
 impl<'a> SelectBuilder<'a> {
-    fn new(row: EntryFields) -> Self {
+    fn new(row: &'a EntryFields) -> Self {
         SelectBuilder {
             row,
             fields: vec![]
@@ -219,23 +219,23 @@ impl<'a> SelectBuilder<'a> {
         }
     }
 
-    pub fn value<'x, T: Borrow<impl Into<ObjectField<'x>> + Clone>>(mut self, value: T) -> Self {
-        self.fields.push(SelectField::Field(value.borrow().clone().into().change_lifetime()));
+    pub fn value<T: Borrow<impl Into<ObjectField> + Clone>>(mut self, value: T) -> Self {
+        self.fields.push(SelectField::Field(value.borrow().clone().into()));
         self
     }
 
-    pub fn sum_value<'x, T: Borrow<impl Into<ObjectField<'x>> + Clone>>(mut self, value: T) -> Self {
-        self.fields.push(SelectField::Sum(value.borrow().clone().into().change_lifetime()));
+    pub fn sum_value<T: Borrow<impl Into<ObjectField> + Clone>>(mut self, value: T) -> Self {
+        self.fields.push(SelectField::Sum(value.borrow().clone().into()));
         self
     }
     
-    pub fn max_value<'x, T: Borrow<impl Into<ObjectField<'x>> + Clone>>(mut self, value: T) -> Self {
-        self.fields.push(SelectField::Max(value.borrow().clone().into().change_lifetime()));
+    pub fn max_value<T: Borrow<impl Into<ObjectField> + Clone>>(mut self, value: T) -> Self {
+        self.fields.push(SelectField::Max(value.borrow().clone().into()));
         self
     }
     
-    pub fn min_value<'x, T: Borrow<impl Into<ObjectField<'x>> + Clone>>(mut self, value: T) -> Self {
-        self.fields.push(SelectField::Min(value.borrow().clone().into().change_lifetime()));
+    pub fn min_value<T: Borrow<impl Into<ObjectField> + Clone>>(mut self, value: T) -> Self {
+        self.fields.push(SelectField::Min(value.borrow().clone().into()));
         self
     }
 
@@ -244,7 +244,7 @@ impl<'a> SelectBuilder<'a> {
         self
     }
 
-    pub fn count_when<'x: 'a>(mut self, value: impl Into<ObjectField<'x>> + Clone) -> Self {
+    pub fn count_when(mut self, value: impl Into<ObjectField> + Clone) -> Self {
         self.fields.push(SelectField::Count(match value.clone().into() {
             ObjectField::Bool(b) => b,
             ObjectField::I32(i) => i != 0,
@@ -259,7 +259,6 @@ impl<'a> SelectBuilder<'a> {
 
     pub fn column(self, index: usize) -> Self {
         let column = self.row.column(index);
-        let column = column.change_lifetime();
         self.value(column)
     }
 

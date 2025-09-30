@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt::Display, ops::{Deref, Range}, rc::Rc};
+use std::{fmt::Display, ops::{Deref, Range}, rc::Rc};
 
 use log_err::LogErrResult;
 use uuid::Uuid;
@@ -8,10 +8,10 @@ use crate::{objects::FieldType, ObjectField, SelectField};
 
 #[derive(Yokeable)]
 #[repr(transparent)]
-pub(crate) struct DeserializedFields<'a>(Vec<ObjectField<'a>>);
+pub(crate) struct DeserializedFields(Vec<ObjectField>);
 
-impl<'a> Deref for DeserializedFields<'a> {
-    type Target = Vec<ObjectField<'a>>;
+impl Deref for DeserializedFields {
+    type Target = Vec<ObjectField>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -21,14 +21,14 @@ impl<'a> Deref for DeserializedFields<'a> {
 #[derive(Clone)]
 pub struct EntryFields(pub(crate) Range<usize>, pub(crate) Rc<[u8]>);
 
-impl From<Vec<ObjectField<'_>>> for EntryFields {
-    fn from(fields: Vec<ObjectField<'_>>) -> Self {
+impl From<Vec<ObjectField>> for EntryFields {
+    fn from(fields: Vec<ObjectField>) -> Self {
         fields.as_slice().into()
     }
 }
 
-impl From<Vec<SelectField<'_>>> for EntryFields {
-    fn from(fields: Vec<SelectField<'_>>) -> Self {
+impl From<Vec<SelectField>> for EntryFields {
+    fn from(fields: Vec<SelectField>) -> Self {
         let mut data = Vec::with_capacity(1 + fields.iter().map(|f| 1 + match &**f {
             ObjectField::Bool(_) => 1,
             ObjectField::I32(_) => 4,
@@ -68,12 +68,12 @@ impl From<Vec<SelectField<'_>>> for EntryFields {
             };
         }
         let len = data.len();
-        EntryFields(Range { start: 0, end: len }, data.into_boxed_slice().into())
+        EntryFields(0..len, data.into_boxed_slice().into())
     }
 }
 
-impl From<&[ObjectField<'_>]> for EntryFields {
-    fn from(fields: &[ObjectField<'_>]) -> Self {
+impl From<&[ObjectField]> for EntryFields {
+    fn from(fields: &[ObjectField]) -> Self {
         let mut data = Vec::with_capacity(1 + fields.iter().map(|f| 1 + match f {
             ObjectField::Bool(_) => 1,
             ObjectField::I32(_) => 4,
@@ -113,7 +113,7 @@ impl From<&[ObjectField<'_>]> for EntryFields {
             };
         }
         let len = data.len();
-        EntryFields(Range { start: 0, end: len }, data.into_boxed_slice().into())
+        EntryFields(0..len, data.into_boxed_slice().into())
     }
 }
 
@@ -130,7 +130,7 @@ impl EntryFields {
         unsafe { std::mem::transmute::<&[u8], &[FieldType]>(&self.1[self.0.start + 1..][..self.len()]) }
     }
 
-    pub fn column(&'_ self, index: usize) -> ObjectField<'_> {
+    pub fn column(&'_ self, index: usize) -> ObjectField {
         let (field_type, bytes) = self.get_column_data(index);
         match field_type {
             FieldType::Bool => ObjectField::Bool(bytes[0] > 0),
@@ -138,8 +138,8 @@ impl EntryFields {
             FieldType::I64 => ObjectField::I64(i64::from_le_bytes(bytes.try_into().log_unwrap())),
             FieldType::Decimal => ObjectField::Decimal(f64::from_le_bytes(bytes.try_into().log_unwrap())),
             FieldType::Id => ObjectField::Id(Uuid::from_bytes_le(bytes.try_into().log_unwrap())),
-            FieldType::String => ObjectField::String(Cow::Borrowed(unsafe { str::from_utf8_unchecked(bytes) })),
-            FieldType::Bytes => ObjectField::Bytes(Cow::Borrowed(bytes))
+            FieldType::String => ObjectField::String(unsafe { str::from_utf8_unchecked(bytes) }.into()),
+            FieldType::Bytes => ObjectField::Bytes(bytes.into())
         }
     }
 
@@ -147,7 +147,7 @@ impl EntryFields {
         &self.1[self.0.start + self.len() + 1..self.0.end]
     }
 
-    pub(crate) fn into_yoke_vector(self) -> Yoke<DeserializedFields<'static>, Box<EntryFields>> {
+    pub(crate) fn into_yoke_vector(self) -> Yoke<DeserializedFields, Box<EntryFields>> {
         let that = Box::new(self);
         Yoke::attach_to_cart(that, |data| {
             let count = data.len();
@@ -169,11 +169,11 @@ impl EntryFields {
                     FieldType::Id => ObjectField::Id(Uuid::from_bytes_le(d[..16].try_into().log_unwrap())),
                     FieldType::String => {
                         let str = unsafe { str::from_utf8_unchecked(&d[1..][..d[0] as usize]) };
-                        ObjectField::String(Cow::Borrowed(str))
+                        ObjectField::String(str.into())
                     },
                     FieldType::Bytes => {
                         let bytes = &d[1..][..d[0] as usize];
-                        ObjectField::Bytes(Cow::Borrowed(bytes))
+                        ObjectField::Bytes(bytes.into())
                     }
                 });
 
