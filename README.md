@@ -65,6 +65,7 @@ let rows = table1
 
 - :heavy_check_mark: On-disk persistence
 - :heavy_check_mark: Parallel execution
+- :hammer: Creating and committing transactions
 - Column Types:
   - :heavy_check_mark: bool
   - :heavy_check_mark: i32
