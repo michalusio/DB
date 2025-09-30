@@ -122,6 +122,15 @@ impl<'a> DBOperator for TableScan<'a> {
         }
     }
 
+    fn reset(&mut self) {
+        self.committed_transactions.clear();
+        self.committed_transactions.insert(Uuid::nil());
+        self.visited_ids.clear();
+        self.current_file_index = self.collection.last_file_index;
+        self.current_file_ref = None;
+        self.current_file_entry = 0;
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         let files_left = self.current_file_index + 1;
         (

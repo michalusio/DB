@@ -65,6 +65,11 @@ where Selector: Clone + for<'x> FnOnce(SelectBuilder<'x>, &EntryFields) -> Selec
         }
     }
 
+    fn reset(&mut self) {
+        self.iterator.reset();
+        self.aggregator = SelectAggregator::new();
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.iterator.size_hint()
     }

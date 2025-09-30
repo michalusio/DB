@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}};
 use itertools::Itertools;
 use uuid::Uuid;
 
-use crate::{collection::collection_config::CollectionConfig, errors::compaction_error::CompactionError, storage::log_file::{entry_fields::EntryFields, log_entry::{EntityEntry, Row, TransactionEntry}}, utils::DBResult};
+use crate::{collection::collection_config::CollectionConfig, errors::compaction_error::CompactionError, storage::log_file::{entry_fields::EntryFields, log_entry::{EntityEntry, TransactionEntry}}, utils::DBResult};
 
 use super::{LogFile, log_entry::LogEntry};
 

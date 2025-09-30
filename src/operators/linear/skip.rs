@@ -33,6 +33,11 @@ impl<Iter: DBOperator> DBOperator for Skip<Iter> {
         }
     }
 
+    fn reset(&mut self) {
+        self.iterator.reset();
+        self.skipped = 0;
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         let (min_size, max_size) = self.iterator.size_hint();
         (

@@ -101,6 +101,14 @@ where   Iter: DBOperator,
         }
     }
 
+    fn reset(&mut self) {
+        self.iterator.reset();
+        self.hashed_iterator.reset();
+        self.hash_map = None;
+        self.current_row = None;
+        self.current_vector = None;
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         let hint1 = self.iterator.size_hint();
         let hint2 = self.hashed_iterator.size_hint();

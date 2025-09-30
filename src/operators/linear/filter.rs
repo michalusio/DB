@@ -38,6 +38,10 @@ where Predicate: Clone + Fn(&EntryFields) -> bool
         }
     }
 
+    fn reset(&mut self) {
+        self.iterator.reset();
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.iterator.size_hint()
     }

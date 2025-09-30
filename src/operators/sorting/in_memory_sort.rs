@@ -62,6 +62,11 @@ where   Iter: DBOperator,
         }
     }
 
+    fn reset(&mut self) {
+        self.iterator.reset();
+        self.sorted_data = None;
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.iterator.size_hint()
     }

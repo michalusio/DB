@@ -106,3 +106,73 @@ let rows = table1
   - :o: Bitmap
   - :o: Hash
 - :o: Statistics
+
+---
+
+## Speed Tests
+
+- 10K collection iteration
+  ```rust
+  collection.table_scan(Uuid::now_v7()).collect()
+  ```
+  time: 372.88 µs - 377.74 µs - 383.85 µs
+
+- 10K collection iteration with deserialization
+  ```rust
+  collection.table_scan(Uuid::now_v7()).deserialize::<TestStruct>().collect()
+  ```
+  time: 7.1473 ms - 7.2109 ms - 7.2803 ms
+
+- 10K collection iteration with a lot of random columns
+  ```rust
+  collection.table_scan(Uuid::now_v7()).deserialize::<TestStruct>().collect()
+  ```
+  time: 7.2862 ms - 7.3538 ms - 7.4276 ms
+
+- 10K collection iteration with filter
+  ```rust
+  collection.table_scan(Uuid::now_v7()).filter(|row| row.column(3).as_bool().unwrap()).collect()
+  ```
+  time: 561.55 µs - 566.01 µs - 571.03 µs
+
+- 10K table nested loop iteration with 100 rows table
+  ```rust
+  table1
+    .table_scan(transaction)
+    .nested_loop(table2.table_scan(transaction), 3, 0)
+    .collect()
+  ```
+  time: 37.511 ms 37.994 ms 38.565 ms
+
+- 10K table hash match iteration with 100 rows table - then sorted on one of the fields
+  ```rust
+  table1
+    .table_scan(transaction)
+    .hash_match(
+      table2.table_scan(transaction),
+      |row| row.column(3),
+      |hashed_row| hashed_row.column(0)
+    )
+    .in_memory_sort(|row| row.column(4), SortDirection::Descending)
+    .select(|builder, row| {
+      builder
+        .column(1)
+        .column(2)
+        .column(8)
+        .max_value(row.column(4).as_i32().unwrap() * 3)
+    })
+    .collect()
+  ```
+  time: 16.545 ms - 17.105 ms - 17.804 ms
+
+- 1M collection iteration
+  ```rust
+  collection.table_scan(Uuid::now_v7()).collect()
+  ```
+  time: 95.702 ms - 98.242 ms - 102.09 ms
+
+- 1M collection iteration with deserialization
+  ```rust
+  collection.table_scan(Uuid::now_v7()).deserialize::<TestStruct>().collect()
+  ```
+  time: 843.02 ms - 853.79 ms - 864.63 ms

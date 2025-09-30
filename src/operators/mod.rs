@@ -9,7 +9,14 @@ mod sorting; pub use sorting::*;
 mod spools; pub use spools::*;
 
 pub trait DBOperator: Sized + Clone {
+    /// Retrieves the next row from the operator.
+    /// An [`Ok(None)`] here means the operator has reached the end of the stream.
+    /// And [`Err(e)`] means an operator has encountered an error - next call to this method _may_ recover. 
     fn next(&mut self) -> DBResult<Option<Row>>;
+
+    /// Resets the operator, as if it was newly created.
+    /// Some operators may choose to retain the caches they have created - specifically spool operators.
+    fn reset(&mut self);
 
     /// Returns the bounds on the remaining length of the operator.
     ///

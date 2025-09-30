@@ -34,6 +34,11 @@ impl<Iter: DBOperator> DBOperator for Take<Iter> {
         }
     }
 
+    fn reset(&mut self) {
+        self.iterator.reset();
+        self.taken = 0;
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         let iterator_left = self.items - self.taken;
         let (min_size, max_size) = self.iterator.size_hint();
