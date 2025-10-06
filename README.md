@@ -1,6 +1,6 @@
-# Rust Query Engine
+# Rust Query Engine (Name to be changed)
 
-A Rust library for **composable, iterator-style query execution**.
+A database-as-a-library based on **composable, iterator-style query execution**.
 Instead of parsing SQL strings, you construct queries with Rust method chains and closures. This gives you type safety, inline logic, and seamless integration with the rest of your Rust code.
 
 ---
